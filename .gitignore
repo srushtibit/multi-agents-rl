@@ -1,0 +1,399 @@
+# NexaCorp AI Support System - .gitignore
+
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# C extensions
+*.so
+
+# Distribution / packaging
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+pip-wheel-metadata/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# PyInstaller
+#  Usually these files are written by a python script from a template
+#  before PyInstaller builds the exe, so as to inject date/other infos into it.
+*.manifest
+*.spec
+
+# Installer logs
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Unit test / coverage reports
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+.pytest_cache/
+
+# Translations
+*.mo
+*.pot
+
+# Django stuff:
+*.log
+local_settings.py
+db.sqlite3
+db.sqlite3-journal
+
+# Flask stuff:
+instance/
+.webassets-cache
+
+# Scrapy stuff:
+.scrapy
+
+# Sphinx documentation
+docs/_build/
+
+# PyBuilder
+target/
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# IPython
+profile_default/
+ipython_config.py
+
+# pyenv
+.python-version
+
+# pipenv
+#   According to pypa/pipenv#598, it is recommended to include Pipfile.lock in version control.
+#   However, in case of collaboration, if having platform-specific dependencies or dependencies
+#   having no cross-platform support, pipenv may install dependencies that don't work, or not
+#   install all needed dependencies.
+#Pipfile.lock
+
+# PEP 582; used by e.g. github.com/David-OConnor/pyflow
+__pypackages__/
+
+# Celery stuff
+celerybeat-schedule
+celerybeat.pid
+
+# SageMath parsed files
+*.sage.py
+
+# Environments
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# Spyder project settings
+.spyderproject
+.spyproject
+
+# Rope project settings
+.ropeproject
+
+# mkdocs documentation
+/site
+
+# mypy
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# Pyre type checker
+.pyre/
+
+# =============================================================================
+# PROJECT-SPECIFIC IGNORES
+# =============================================================================
+
+# Knowledge Base Files
+kb/vector_index/
+kb/*.index
+kb/*.pkl
+kb/*.json
+kb/simple_knowledge_base.pkl
+kb/simple_knowledge_base.json
+kb/metadata.json
+
+# Training Results and Models
+results/
+models/saved_models/
+models/checkpoints/
+*.pth
+*.pt
+*.ckpt
+*.h5
+*.hdf5
+
+# Logs
+logs/
+*.log
+training.log
+system.log
+debug.log
+
+# Cache directories
+cache/
+.cache/
+__cache__/
+
+# Ollama and LLM Models (these are large files)
+ollama_models/
+llm_models/
+*.bin
+*.safetensors
+
+# Vector Database Files
+faiss_index/
+chromadb/
+*.faiss
+*.ann
+
+# Temporary files
+tmp/
+temp/
+.tmp/
+.temp/
+
+# Data files (exclude large datasets from version control)
+data/raw/
+data/processed/
+dataset/*.csv
+dataset/*.xlsx
+dataset/*.json
+# Keep small sample files for testing
+!dataset/sample_*
+!dataset/test_*
+
+# Configuration files with sensitive information
+config/local_config.yaml
+config/production_config.yaml
+config/secrets.yaml
+.secrets
+
+# Email configuration
+config/email_config.yaml
+config/smtp_config.yaml
+
+# Evaluation results
+evaluation/detailed_results/
+evaluation/*.json
+evaluation/*.csv
+evaluation/baseline_comparison.json
+
+# Streamlit files
+.streamlit/
+streamlit_app.log
+
+# VS Code
+.vscode/
+*.code-workspace
+
+# PyCharm
+.idea/
+
+# Emacs
+*~
+\#*\#
+/.emacs.desktop
+/.emacs.desktop.lock
+*.elc
+auto-save-list
+tramp
+.\#*
+
+# Vim
+[._]*.s[a-v][a-z]
+[._]*.sw[a-p]
+[._]s[a-rt-v][a-z]
+[._]ss[a-gi-z]
+[._]sw[a-p]
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Windows
+Thumbs.db
+Thumbs.db:encryptable
+ehthumbs.db
+ehthumbs_vista.db
+*.stackdump
+[Dd]esktop.ini
+$RECYCLE.BIN/
+*.cab
+*.msi
+*.msix
+*.msm
+*.msp
+*.lnk
+
+# Linux
+*~
+
+# =============================================================================
+# SYSTEM SPECIFIC FILES TO KEEP
+# =============================================================================
+
+# Keep important configuration templates
+!config/system_config.yaml
+!config/email_templates/
+
+# Keep sample data for testing
+!dataset/sample_tickets.csv
+
+# Keep documentation
+!docs/
+!README.md
+!LICENSE
+
+# Keep requirements files
+!requirements.txt
+!requirements-minimal.txt
+
+# Keep setup files
+!setup.py
+!pyproject.toml
+
+# Keep demo and example files
+!*demo*.py
+!*example*.py
+!*sample*.py
+
+# =============================================================================
+# RESEARCH AND ACADEMIC FILES
+# =============================================================================
+
+# LaTeX files for academic writing
+*.aux
+*.bbl
+*.blg
+*.fdb_latexmk
+*.fls
+*.log
+*.out
+*.synctex.gz
+*.toc
+*.lof
+*.lot
+*.nav
+*.snm
+*.vrb
+
+# Bibliography files
+*.bib.bak
+
+# Overleaf
+.overleaf/
+
+# Academic paper drafts (keep only final versions)
+drafts/
+*draft*
+*temp*
+
+# Experimental notebooks (keep only clean versions)
+experiments/scratch/
+*.ipynb
+!notebooks/final/*.ipynb
+
+# =============================================================================
+# SECURITY AND PRIVACY
+# =============================================================================
+
+# API Keys and secrets
+*.key
+*.pem
+*.p12
+api_keys.txt
+secrets.txt
+
+# Database files
+*.db
+*.sqlite
+*.sqlite3
+
+# Personal information
+personal/
+private/
+
+# Backup files
+*.bak
+*.backup
+*.old
+*.orig
+
+# =============================================================================
+# PERFORMANCE AND MONITORING
+# =============================================================================
+
+# Profiling results
+*.prof
+profiler_output/
+
+# Memory dumps
+*.dump
+
+# Performance logs
+perf.data*
+
+# Monitoring data
+monitoring/
+metrics/
+
+# =============================================================================
+# DEPLOYMENT FILES
+# =============================================================================
+
+# Docker
+.dockerignore
+docker-compose.override.yml
+
+# Kubernetes
+k8s-local/
+
+# Deployment scripts
+deploy/local/
+deploy/staging/
+
+# =============================================================================
+# NOTES
+# =============================================================================
+# This .gitignore is configured for the NexaCorp AI Support System project
+# It excludes large model files, training data, and sensitive configuration
+# while keeping essential code, documentation, and configuration templates
+# 
+# To add specific files that are normally ignored, use:
+# git add -f filename
+#
+# To check what would be ignored:
+# git check-ignore *
+# =============================================================================

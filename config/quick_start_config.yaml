@@ -1,0 +1,26 @@
+
+# Basic system configuration for quick start
+system:
+  name: "NexaCorp AI Support System - Quick Start"
+  environment: "local"
+  debug: true
+
+languages:
+  supported: ["en", "es", "de"]
+  primary: "en"
+  auto_detect: true
+
+agents:
+  communication:
+    symbolic_vocab_size: 100
+    learning_rate: 0.001
+  
+  retrieval:
+    max_documents: 10
+    
+  escalation:
+    severity_threshold: 0.8
+
+knowledge_base:
+  similarity_threshold: 0.7
+  max_results: 5
