@@ -294,7 +294,7 @@ class AgentCoordinator:
     async def run_cycle(self):
         """Run one coordination cycle."""
         if not self.is_running:
-            return
+            return []
         
         # Collect all outbound messages from agents
         all_messages = []
@@ -305,6 +305,9 @@ class AgentCoordinator:
         # Route messages to recipients
         for message in all_messages:
             await self._route_message(message)
+        
+        # Return all messages generated this cycle
+        return all_messages
     
     async def _route_message(self, message: Message):
         """Route a message to its recipient."""

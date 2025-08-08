@@ -390,7 +390,7 @@ class RetrievalAgent(BaseAgent):
             content=response_content,
             metadata=response_metadata,
             sender=self.agent_id,
-            recipient="critic_agent",  # Send to critic for evaluation
+            recipient=original_message.sender,  # Send back to original sender
             language=original_message.language
         )
         

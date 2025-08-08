@@ -10,7 +10,15 @@ import re
 
 # Language processing imports
 from langdetect import detect, LangDetectException
-from googletrans import Translator
+
+# googletrans is optional; it can break with certain httpcore versions.
+# Use lazy/guarded import and provide a safe fallback.
+try:
+    from googletrans import Translator as GoogleTranslator  # type: ignore
+    _GOOGLETRANS_AVAILABLE = True
+except Exception as _gt_exc:  # noqa: F841
+    GoogleTranslator = None  # type: ignore
+    _GOOGLETRANS_AVAILABLE = False
 import nltk
 from nltk.tokenize import sent_tokenize, word_tokenize
 from nltk.corpus import stopwords
@@ -139,7 +147,16 @@ class MultilingualTranslator:
     
     def __init__(self):
         self.config = get_config()
-        self.translator = Translator()
+        # Initialize translator only if googletrans import succeeded and enabled in config
+        self.translator = None
+        try:
+            use_translator = self.config.get('languages.translation_service', 'googletrans') == 'googletrans'
+            if use_translator and _GOOGLETRANS_AVAILABLE and GoogleTranslator is not None:
+                self.translator = GoogleTranslator()
+            else:
+                logger.warning("googletrans unavailable or disabled; falling back to no-op translation")
+        except Exception as e:
+            logger.warning(f"Failed to initialize googletrans translator, fallback will be used: {e}")
         self.translation_cache: Dict[str, TranslationResult] = {}
         self.primary_language = self.config.get('languages.primary', 'en')
         
@@ -185,20 +202,29 @@ class MultilingualTranslator:
                     confidence=1.0
                 )
             else:
-                # Perform translation
-                translation = self.translator.translate(
-                    text, 
-                    src=source_language, 
-                    dest=target_language
-                )
-                
-                result = TranslationResult(
-                    original_text=text,
-                    translated_text=translation.text,
-                    source_language=source_language,
-                    target_language=target_language,
-                    confidence=getattr(translation, 'confidence', 0.8)
-                )
+                # Perform translation if a translator is available; otherwise, pass-through
+                if self.translator is not None:
+                    translation = self.translator.translate(
+                        text,
+                        src=source_language,
+                        dest=target_language
+                    )
+                    result = TranslationResult(
+                        original_text=text,
+                        translated_text=getattr(translation, 'text', text),
+                        source_language=source_language,
+                        target_language=target_language,
+                        confidence=getattr(translation, 'confidence', 0.8)
+                    )
+                else:
+                    # No translator available; return original text
+                    result = TranslationResult(
+                        original_text=text,
+                        translated_text=text,
+                        source_language=source_language,
+                        target_language=target_language,
+                        confidence=0.0
+                    )
             
             # Cache result
             self.translation_cache[cache_key] = result

@@ -20,10 +20,10 @@ languages:
 llm:
   provider: "ollama"  # ollama, openai, azure, anthropic
   models:
-    communication: "llama3:8b"
-    retrieval: "mistral:7b"
-    critic: "phi3:mini"
-    escalation: "llama3:8b"
+    communication: "gpt-oss:latest"
+    retrieval: "gpt-oss:latest"
+    critic: "gpt-oss:latest"
+    escalation: "gpt-oss:latest"
   ollama:
     base_url: "http://localhost:11434"
     timeout: 60

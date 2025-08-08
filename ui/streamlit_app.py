@@ -5,6 +5,7 @@ Provides an interactive interface for testing, monitoring, and training the syst
 
 import streamlit as st
 import pandas as pd
+import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
@@ -15,6 +16,13 @@ from datetime import datetime, timedelta
 from typing import Dict, Any, List, Optional
 import time
 import os
+import sys
+from pathlib import Path
+
+# Ensure project root is on sys.path for absolute package imports
+ROOT_DIR = Path(__file__).resolve().parents[1]
+if str(ROOT_DIR) not in sys.path:
+    sys.path.insert(0, str(ROOT_DIR))
 
 # Import system components
 from agents.base_agent import AgentCoordinator, Message, MessageType
@@ -63,19 +71,57 @@ st.markdown("""
         color: #dc3545;
         font-weight: bold;
     }
-    .message-user {
-        background-color: #e3f2fd;
+    .chat-container {
+        max-height: 75vh;
+        overflow-y: auto;
         padding: 1rem;
+        background-color: transparent;
         border-radius: 0.5rem;
-        margin: 0.5rem 0;
-        border-left: 4px solid #2196f3;
+        margin-bottom: 4rem;
+    }
+    .message-user {
+        background-color: #dcf8c6;
+        color: #075e54;
+        padding: 0.75rem 1rem;
+        border-radius: 18px 18px 4px 18px;
+        margin: 0.5rem 0 0.5rem auto;
+        max-width: 70%;
+        text-align: right;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        word-wrap: break-word;
     }
     .message-agent {
-        background-color: #f3e5f5;
+        background-color: #ffffff;
+        color: #333333;
+        padding: 0.75rem 1rem;
+        border-radius: 18px 18px 18px 4px;
+        margin: 0.5rem auto 0.5rem 0;
+        max-width: 70%;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        word-wrap: break-word;
+    }
+    .input-container {
+        position: fixed;
+        bottom: 2rem;
+        left: 50%;
+        transform: translateX(-50%);
+        width: 80%;
+        max-width: 800px;
+        background-color: #ffffff;
+        border-radius: 1rem;
+        box-shadow: 0 4px 12px rgba(0,0,0,0.15);
         padding: 1rem;
-        border-radius: 0.5rem;
-        margin: 0.5rem 0;
-        border-left: 4px solid #9c27b0;
+        z-index: 1000;
+    }
+    .thinking-button {
+        background-color: #e8f4f8;
+        color: #1976d2;
+        padding: 0.5rem 1rem;
+        border-radius: 12px;
+        margin: 0.25rem auto 0.25rem 0;
+        max-width: 70%;
+        font-size: 0.9em;
+        border: 1px solid #e3f2fd;
     }
     .message-system {
         background-color: #fff3e0;
@@ -239,96 +285,91 @@ class SupportSystemDashboard:
                 self._reset_system()
     
     def _render_chat_interface(self):
-        """Render the main chat interface."""
+        """Render the main chat interface - ChatGPT style."""
         st.markdown("## 💬 Interactive Support Chat")
         
-        # Query input
-        col1, col2 = st.columns([4, 1])
+        # Chat container with proper scrolling (main content area)
+        chat_container = st.container()
         
-        with col1:
-            query = st.text_area(
-                "Enter your support query:",
-                value=st.session_state.current_query,
-                height=100,
-                placeholder="e.g., I cannot access my email account, it shows authentication error..."
-            )
-        
-        with col2:
-            st.markdown("### 🎯 Quick Examples")
-            example_queries = [
-                "Password reset help",
-                "VPN connection issue", 
-                "Email not syncing",
-                "Software installation",
-                "Account access problem"
-            ]
-            
-            for example in example_queries:
-                if st.button(example, key=f"example_{example}"):
-                    st.session_state.current_query = example
-                    st.rerun()
-        
-        # Send query
-        col1, col2, col3 = st.columns([1, 1, 1])
-        
-        with col1:
-            if st.button("📤 Send Query", type="primary", disabled=not query.strip()):
-                asyncio.run(self._process_query(query))
-        
-        with col2:
-            if st.button("🎲 Generate Random Query"):
-                random_task = st.session_state.task_generator.generate_task()
-                st.session_state.current_query = random_task.user_query
-                st.rerun()
-        
-        with col3:
-            if st.button("🔄 Clear Input"):
-                st.session_state.current_query = ""
-                st.rerun()
-        
-        # Conversation display
-        st.markdown("### 📜 Conversation History")
-        
-        if st.session_state.conversation_history:
-            for i, exchange in enumerate(st.session_state.conversation_history):
-                with st.expander(f"Exchange {i+1}: {exchange.get('query', 'N/A')[:50]}..."):
+        with chat_container:
+            # Display chat history first (scrollable area)
+            if st.session_state.conversation_history:
+                # Create a scrollable chat area
+                chat_area = st.container()
+                with chat_area:
+                    st.markdown('<div class="chat-container">', unsafe_allow_html=True)
                     
-                    # User query
-                    st.markdown(f"""
-                    <div class="message-user">
-                        <strong>👤 User ({exchange.get('language', 'en')}):</strong><br>
-                        {exchange.get('query', 'N/A')}
-                    </div>
-                    """, unsafe_allow_html=True)
-                    
-                    # System response
-                    if 'response' in exchange:
+                    for exchange in st.session_state.conversation_history:
+                        # User message (right side)
                         st.markdown(f"""
-                        <div class="message-agent">
-                            <strong>🤖 Assistant:</strong><br>
-                            {exchange['response']}
+                        <div class="message-user">
+                            {exchange.get('query', 'N/A')}
                         </div>
                         """, unsafe_allow_html=True)
-                    
-                    # Evaluation details
-                    if 'evaluation' in exchange:
-                        eval_data = exchange['evaluation']
                         
-                        col1, col2, col3, col4 = st.columns(4)
-                        col1.metric("Overall Score", f"{eval_data.get('overall_score', 0):.3f}")
-                        col2.metric("Relevance", f"{eval_data.get('relevance_score', 0):.3f}")
-                        col3.metric("Accuracy", f"{eval_data.get('accuracy_score', 0):.3f}")
-                        col4.metric("Completeness", f"{eval_data.get('completeness_score', 0):.3f}")
+                        # Bot response (left side)
+                        if 'chat_response' in exchange and exchange['chat_response']:
+                            st.markdown(f"""
+                            <div class="message-agent">
+                                🤖 {exchange['chat_response']}
+                            </div>
+                            """, unsafe_allow_html=True)
+                            
+                            # Thinking process button (if detailed info available)
+                            if ('response' in exchange and exchange['response'] is not None) or \
+                               ('agent_conversation' in exchange and exchange['agent_conversation']) or \
+                               ('evaluation' in exchange and exchange['evaluation'] is not None):
+                                
+                                thinking_details = self._format_thinking_details(exchange)
+                                if thinking_details:
+                                    with st.expander("🤔 Show thinking process"):
+                                        st.markdown(thinking_details, unsafe_allow_html=True)
                     
-                    # Symbolic encoding info
-                    if 'symbolic_encoding' in exchange:
-                        with st.expander("🔢 Symbolic Encoding Details"):
-                            encoding = exchange['symbolic_encoding']
-                            st.write(f"Encoding Length: {len(encoding)}")
-                            st.write(f"Unique Symbols: {len(set(encoding))}")
-                            st.write(f"Encoding: {encoding[:20]}..." if len(encoding) > 20 else f"Encoding: {encoding}")
-        else:
-            st.info("👋 Welcome! Start a conversation by entering a support query above.")
+                    st.markdown('</div>', unsafe_allow_html=True)
+            else:
+                st.info("👋 Welcome! I'm your AI support assistant. How can I help you today?")
+        
+        # Input area at the bottom (ChatGPT style)
+        st.markdown("---")
+        st.markdown("### 💬 Ask me anything...")
+        
+        # Query input at bottom (Enter to send via form)
+        with st.form(key="chat_form", clear_on_submit=True):
+            query = st.text_input(
+                "Your message",
+                value="",
+                placeholder="Type your message and press Enter to send...",
+                key="chat_input"
+            )
+            submitted = st.form_submit_button("📤 Send")
+        
+        if submitted and query.strip():
+            asyncio.run(self._process_query(query))
+        
+        # Quick examples and utilities
+        st.markdown("### 🎯 Quick Examples")
+        example_queries = [
+            "Password reset help",
+            "VPN connection issue",
+            "Email not syncing",
+            "Software installation",
+            "Account access problem"
+        ]
+        cols = st.columns(len(example_queries))
+        for col, example in zip(cols, example_queries):
+            with col:
+                if st.button(example, key=f"example_{example}"):
+                    asyncio.run(self._process_query(example))
+        
+        col_util_1, col_util_2 = st.columns([1, 1])
+        with col_util_1:
+            if st.button("🎲 Random Query"):
+                random_task = st.session_state.task_generator.generate_task()
+                asyncio.run(self._process_query(random_task.user_query))
+        with col_util_2:
+            if st.button("🔄 Clear"):
+                st.session_state.current_query = ""
+                st.rerun()
     
     def _render_monitoring_dashboard(self):
         """Render the system monitoring dashboard."""
@@ -767,6 +808,10 @@ class SupportSystemDashboard:
                 language=language_result.language
             )
             
+            # Ensure agents are running before processing cycles
+            if not getattr(st.session_state.coordinator, "is_running", False):
+                st.session_state.coordinator.start_all_agents()
+
             # Process through communication agent
             st.session_state.communication_agent.receive_message(user_message)
             
@@ -775,12 +820,23 @@ class SupportSystemDashboard:
             final_response = ""
             evaluation_result = None
             symbolic_encoding = None
+            agent_conversation = []  # Track inter-agent conversation
             
-            for _ in range(10):  # Max 10 cycles
-                messages = await st.session_state.coordinator.run_cycle()
+            for cycle_num in range(10):  # Max 10 cycles
+                messages = await st.session_state.coordinator.run_cycle() or []
                 
                 for message in messages:
-                    if message.type == MessageType.RESPONSE and message.sender == "retrieval_agent":
+                    # Record all inter-agent messages
+                    agent_conversation.append({
+                        'cycle': cycle_num + 1,
+                        'sender': message.sender,
+                        'recipient': message.recipient,
+                        'type': message.type.value,
+                        'content': message.content[:200] + "..." if len(message.content) > 200 else message.content,
+                        'timestamp': datetime.now().strftime("%H:%M:%S")
+                    })
+                    
+                    if message.type == MessageType.RESPONSE and (message.sender == "retrieval_agent" or message.recipient == "user"):
                         final_response = message.content
                         response_received = True
                     
@@ -793,12 +849,17 @@ class SupportSystemDashboard:
                 if response_received:
                     break
             
+            # Generate chat-like response from detailed search results
+            chat_response = self._generate_chat_response(final_response, query)
+            
             # Record conversation
             conversation_entry = {
                 'timestamp': datetime.now().isoformat(),
                 'query': query,
                 'language': language_result.language,
                 'response': final_response or "No response generated",
+                'chat_response': chat_response,
+                'agent_conversation': agent_conversation,
                 'symbolic_encoding': symbolic_encoding,
                 'evaluation': evaluation_result
             }
@@ -810,6 +871,164 @@ class SupportSystemDashboard:
         except Exception as e:
             st.error(f"❌ Error processing query: {e}")
             logger.error(f"Query processing error: {e}")
+    
+    def _generate_chat_response(self, detailed_response: str, query: str) -> str:
+        """Generate a concise, chat-like response from detailed search results."""
+        
+        # Handle simple greetings and casual conversation
+        query_lower = query.lower().strip()
+        simple_greetings = ['hi', 'hello', 'hey', 'good morning', 'good afternoon', 'good evening', 'how are you', 'what\'s up', 'sup']
+        
+        if any(greeting in query_lower for greeting in simple_greetings):
+            return "Hello! 👋 I'm your AI support assistant. I'm here to help you with any technical issues, account problems, or questions you might have. How can I assist you today?"
+        
+        if not detailed_response or detailed_response == "No response generated":
+            return "I'm sorry, I couldn't find any relevant information for your query. Please try rephrasing your question or contact support for assistance."
+        
+        # Extract the main solution from the first result
+        try:
+            lines = detailed_response.split('\n')
+            first_result = None
+            solution = None
+            
+            # Find the first result and extract its solution
+            for i, line in enumerate(lines):
+                if line.strip().startswith('1.') and 'Title:' in line:
+                    # Extract title
+                    title_start = line.find('Title:') + 6
+                    title_end = line.find('Description:')
+                    if title_end == -1:
+                        title_end = len(line)
+                    title = line[title_start:title_end].strip()
+                    
+                    # Look for solution in subsequent lines
+                    for j in range(i, min(i + 5, len(lines))):
+                        if 'Solution:' in lines[j]:
+                            solution_start = lines[j].find('Solution:') + 9
+                            solution = lines[j][solution_start:].strip()
+                            break
+                    
+                    first_result = title
+                    break
+            
+            # Generate chat response based on query type
+            if 'password' in query_lower and 'reset' in query_lower:
+                if solution:
+                    return f"For password reset issues, here's what you can do: {solution}"
+                return "For password reset issues, please check your spam folder, verify your email address, and ensure the email service is configured correctly."
+            
+            elif 'access' in query_lower or 'login' in query_lower or 'dashboard' in query_lower:
+                if solution:
+                    return f"To resolve access issues: {solution}"
+                return "For access problems, please verify your credentials, check your account status, and ensure you have the proper permissions."
+            
+            elif 'slow' in query_lower or 'performance' in query_lower:
+                if solution:
+                    return f"To improve performance: {solution}"
+                return "For performance issues, try clearing your browser cache, checking your network connection, and restarting the application."
+            
+            elif 'upload' in query_lower or 'file' in query_lower:
+                if solution:
+                    return f"For file upload problems: {solution}"
+                return "For file upload issues, check the file size limits, verify the file format is supported, and try using a different browser."
+            
+            elif 'email' in query_lower or 'notification' in query_lower:
+                if solution:
+                    return f"To fix email notification issues: {solution}"
+                return "For email notification problems, check the email service configuration, verify SMTP settings, and test email connectivity."
+            
+            elif 'leaves' in query_lower or 'leave' in query_lower:
+                return "If your leave applications aren't showing on the panel, please check: 1) Ensure you've submitted your leave request through the correct system, 2) Verify you're looking in the right section (My Leaves, Leave History, etc.), 3) Check if there are any pending approvals needed, 4) Contact HR if your approved leaves still don't appear after 24 hours."
+            
+            else:
+                # Generic response with the first solution found
+                if solution and first_result:
+                    return f"I found a solution for '{first_result}': {solution}"
+                elif first_result:
+                    # Try to extract a useful response even without explicit solution
+                    if 'access' in first_result.lower() or 'dashboard' in first_result.lower():
+                        return "It seems you're having trouble accessing a system or dashboard. Try verifying your login credentials, checking your account permissions, and ensuring your account is active. If the issue persists, contact your system administrator."
+                    elif 'password' in first_result.lower():
+                        return "For password-related issues, first check your spam/junk folder for reset emails. Make sure you're using the correct email address and that your account isn't locked. If you still can't reset your password, contact support."
+                    elif 'email' in first_result.lower() or 'notification' in first_result.lower():
+                        return "Email notification issues are usually caused by incorrect email settings. Check that your email address is correct in your profile, verify SMTP configuration, and ensure emails aren't being blocked by your email provider."
+                    elif 'slow' in first_result.lower() or 'performance' in first_result.lower():
+                        return "For performance issues, try clearing your browser cache and cookies, check your internet connection, and close other applications that might be using system resources. If using a web application, try a different browser."
+                    elif 'upload' in first_result.lower() or 'file' in first_result.lower():
+                        return "File upload problems are often due to file size limits or unsupported formats. Check that your file is under the size limit, in a supported format (PDF, JPG, PNG, DOC, etc.), and try using a different browser if the issue continues."
+                    else:
+                        return f"Based on similar cases like '{first_result}', I recommend checking your account settings, verifying your permissions, and ensuring all system requirements are met. If the problem continues, contact technical support with specific error details."
+                else:
+                    # Last resort - be more helpful than just "check detailed results"
+                    return "I couldn't find an exact match for your issue, but here are some general troubleshooting steps: 1) Check your account permissions and settings, 2) Clear your browser cache and cookies, 3) Try logging out and back in, 4) Contact support if the issue persists with specific error messages."
+        
+        except Exception:
+            # Fallback for any parsing errors - still be helpful
+            if 'password' in query_lower:
+                return "For password issues, check your spam folder for reset emails and verify your email address is correct."
+            elif 'access' in query_lower or 'login' in query_lower:
+                return "For access problems, verify your credentials and check that your account is active."
+            elif 'slow' in query_lower or 'performance' in query_lower:
+                return "For performance issues, try clearing your browser cache and checking your internet connection."
+            else:
+                return "I'm here to help! Try checking your account settings and permissions first. If the issue persists, contact support with specific details about what you're experiencing."
+    
+    def _format_thinking_details(self, exchange: dict) -> str:
+        """Format the thinking process details for the expandable section."""
+        details = []
+        
+        # Add detailed search results
+        if 'response' in exchange and exchange['response'] is not None:
+            details.append(f"""
+            <div style="background-color: #f8f9fa; color: #212529; padding: 1rem; border-radius: 0.5rem; border-left: 4px solid #17a2b8; margin: 0.5rem 0;">
+                <strong style="color: #17a2b8;">🔍 Knowledge Base Search Results:</strong><br>
+                <span style="color: #495057;">{exchange['response']}</span>
+            </div>
+            """)
+        
+        # Add agent conversation
+        if 'agent_conversation' in exchange and exchange['agent_conversation']:
+            details.append('<div style="margin: 0.5rem 0;"><strong style="color: #1976d2;">🤖 Agent Communication:</strong></div>')
+            
+            for msg in exchange['agent_conversation']:
+                sender_emoji = "🗣️" if msg['sender'] == "communication_agent" else "🔍" if msg['sender'] == "retrieval_agent" else "🤖"
+                recipient_emoji = "🗣️" if msg['recipient'] == "communication_agent" else "🔍" if msg['recipient'] == "retrieval_agent" else "🤖"
+                
+                details.append(f"""
+                <div style="background-color: #f1f3f4; color: #212529; padding: 0.5rem; margin: 0.25rem 0; border-radius: 0.25rem; font-size: 0.9em;">
+                    <strong style="color: #1f2937;">Cycle {msg['cycle']} - {msg['timestamp']}</strong><br>
+                    {sender_emoji} <strong style="color: #374151;">{msg['sender'].replace('_', ' ').title()}</strong> 
+                    → {recipient_emoji} <strong style="color: #374151;">{msg['recipient'].replace('_', ' ').title()}</strong> 
+                    (<em style="color: #6b7280;">{msg['type']}</em>)<br>
+                    <span style="color: #4b5563;">{msg['content']}</span>
+                </div>
+                """)
+        
+        # Add evaluation metrics
+        if 'evaluation' in exchange and exchange['evaluation'] is not None:
+            eval_data = exchange['evaluation']
+            details.append(f"""
+            <div style="background-color: #fff3e0; color: #212529; padding: 1rem; border-radius: 0.5rem; border-left: 4px solid #ff9800; margin: 0.5rem 0;">
+                <strong style="color: #ff9800;">📊 Response Quality Metrics:</strong><br>
+                Overall Score: {eval_data.get('overall_score', 0):.3f} | 
+                Relevance: {eval_data.get('relevance_score', 0):.3f} | 
+                Accuracy: {eval_data.get('accuracy_score', 0):.3f} | 
+                Completeness: {eval_data.get('completeness_score', 0):.3f}
+            </div>
+            """)
+        
+        # Add symbolic encoding
+        if 'symbolic_encoding' in exchange and exchange['symbolic_encoding'] is not None:
+            encoding = exchange['symbolic_encoding']
+            details.append(f"""
+            <div style="background-color: #e8f5e8; color: #212529; padding: 1rem; border-radius: 0.5rem; border-left: 4px solid #4caf50; margin: 0.5rem 0;">
+                <strong style="color: #4caf50;">🔢 Symbolic Encoding:</strong><br>
+                Length: {len(encoding)} | Unique Symbols: {len(set(encoding))} | 
+                Encoding: {encoding[:20]}{"..." if len(encoding) > 20 else ""}
+            </div>
+            """)
+        
+        return "".join(details)
     
     def _start_agents(self):
         """Start all agents."""
