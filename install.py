@@ -168,17 +168,17 @@ def main():
     print(f"Python: {sys.version}")
     print("=" * 60)
     
-    # Check Python version
-    if not check_python_version():
-        sys.exit(1)
+    # # Check Python version
+    # if not check_python_version():
+    #     sys.exit(1)
     
-    # Install minimal requirements
-    if not install_minimal_requirements():
-        print("\n❌ Installation failed at minimal requirements stage")
-        sys.exit(1)
+    # # Install minimal requirements
+    # if not install_minimal_requirements():
+    #     print("\n❌ Installation failed at minimal requirements stage")
+    #     sys.exit(1)
     
-    # Install optional packages
-    install_optional_packages()
+    # # Install optional packages
+    # install_optional_packages()
     
     # Download NLTK data
     download_nltk_data()

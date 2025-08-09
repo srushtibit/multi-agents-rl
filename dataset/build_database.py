@@ -50,7 +50,7 @@ class ProcessingConfig:
     duplicate_threshold: float = 0.95
 
     # Embedding settings
-    embedding_model: str = 'all-MiniLM-L6-v2'
+    embedding_model: str = 'sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2'
     batch_size: int = 32
 
     # File processing
@@ -517,17 +517,22 @@ class EnhancedKnowledgeBaseBuilder:
         return chunks
 
     def create_faiss_index(self, chunks: List[ProcessedChunk]) -> Tuple[faiss.Index, Dict[str, Dict]]:
-        """Create FAISS index with enhanced mapping"""
+        """Create FAISS index with enhanced mapping (Inner Product + normalized vectors for cosine)."""
         if not chunks or not chunks[0].embedding is not None:
             raise ValueError("Chunks must have embeddings before creating index")
 
-        # Create index
+        # Create IP index (cosine similarity with normalized vectors)
         dimension = chunks[0].embedding.shape[0]
-        index = faiss.IndexFlatL2(dimension)
+        index = faiss.IndexFlatIP(dimension)
         index = faiss.IndexIDMap(index)
 
         # Prepare data
-        embeddings = np.array([chunk.embedding for chunk in chunks])
+        embeddings = np.array([chunk.embedding for chunk in chunks], dtype='float32')
+        # Normalize embeddings for IP/cosine
+        try:
+            faiss.normalize_L2(embeddings)
+        except Exception:
+            pass
         chunk_ids = np.array([hash(chunk.chunk_id) % (2**31) for chunk in chunks])  # Convert to int32
 
         # Add to index
@@ -592,7 +597,7 @@ def create_default_config() -> ProcessingConfig:
         chunk_size=512,
         chunk_overlap=50,
         min_chunk_size=50,
-        embedding_model='all-MiniLM-L6-v2',
+        embedding_model='sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2',
         batch_size=32
     )
 
@@ -601,17 +606,23 @@ def main():
     # Configuration
     config = create_default_config()
 
-    # File paths (relative to dataset directory)
+    # Resolve paths relative to the project tree
+    dataset_dir = Path(__file__).resolve().parent
+    project_root = dataset_dir.parent  # multi-agents-rl
+    kb_dir = project_root / "kb"
+    kb_dir.mkdir(parents=True, exist_ok=True)
+
+    # File paths (resolved under dataset directory)
     all_files = [
-        "NexaCorp HR Manual.docx",
-        "NexaCorp IT Support Manual.docx",
-        "NexaCorp Payroll Support Manual.docx",
-        "aa_dataset-tickets-multi-lang-5-2-50-version.csv",
-        "dataset-tickets-german_normalized.csv",
-        "dataset-tickets-german_normalized_50_5_2.csv",
-        "dataset-tickets-multi-lang3-4k.csv",
-        "dataset-tickets-multi-lang-4-20k.csv",
-        "nexacorp_tickets.xlsx"
+        dataset_dir / "NexaCorp HR Manual.docx",
+        dataset_dir / "NexaCorp IT Support Manual.docx",
+        dataset_dir / "NexaCorp Payroll Support Manual.docx",
+        dataset_dir / "aa_dataset-tickets-multi-lang-5-2-50-version.csv",
+        dataset_dir / "dataset-tickets-german_normalized.csv",
+        dataset_dir / "dataset-tickets-german_normalized_50_5_2.csv",
+        dataset_dir / "dataset-tickets-multi-lang3-4k.csv",
+        dataset_dir / "dataset-tickets-multi-lang-4-20k.csv",
+        dataset_dir / "nexacorp_tickets.xlsx"
     ]
 
     # Create builder
@@ -620,9 +631,9 @@ def main():
     # Build knowledge base
     try:
         builder.build_knowledge_base(
-            file_paths=all_files,
-            index_path="nexa_corp_enhanced.index",
-            mapping_path="nexa_corp_enhanced_mapping.json"
+            file_paths=[str(p) for p in all_files],
+            index_path=str(kb_dir / "faiss.index"),
+            mapping_path=str(kb_dir / "metadata.json")
         )
         logger.info("🎉 Enhanced knowledge base creation completed successfully!")
 

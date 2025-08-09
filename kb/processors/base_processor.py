@@ -49,6 +49,12 @@ class DocumentChunk:
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> 'DocumentChunk':
         """Create chunk from dictionary."""
+        # Handle the mapping file format
+        if 'chunk_id' in data and 'id' not in data:
+            data['id'] = data.pop('chunk_id')
+        if 'text' in data and 'content' not in data:
+            data['content'] = data.pop('text')
+
         return cls(**data)
 
 @dataclass

@@ -20,10 +20,10 @@ languages:
 llm:
   provider: "ollama"  # ollama, openai, azure, anthropic
   models:
-    communication: "gpt-oss:latest"
-    retrieval: "gpt-oss:latest"
-    critic: "gpt-oss:latest"
-    escalation: "gpt-oss:latest"
+    communication: "qwen3:1.7b"
+    retrieval: "qwen3:1.7b"
+    critic: "qwen3:1.7b"
+    escalation: "qwen3:0.6b"
   ollama:
     base_url: "http://localhost:11434"
     timeout: 60
@@ -43,7 +43,7 @@ knowledge_base:
     docx: true
     pdf: true
     txt: true
-  index_path: "kb/vector_index"
+  index_path: "kb/faiss.index"
   metadata_path: "kb/metadata.json"
 
 # Agent Configuration

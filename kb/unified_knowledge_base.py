@@ -87,9 +87,35 @@ class UnifiedKnowledgeBase:
         # Paths
         self.index_path = index_path or self.config.get('knowledge_base.index_path', 'kb/vector_index')
         self.metadata_path = metadata_path or self.config.get('knowledge_base.metadata_path', 'kb/metadata.json')
-        
-        # Ensure directories exist
-        os.makedirs(os.path.dirname(self.index_path), exist_ok=True)
+
+        # Normalize index path robustly before creating directories
+        try:
+            idx_candidate = self.index_path
+            if os.path.isdir(idx_candidate):
+                # Provided path is a directory
+                self.index_dir = idx_candidate
+                self.index_path = os.path.join(self.index_dir, 'faiss.index')
+            else:
+                root, ext = os.path.splitext(idx_candidate)
+                if ext:
+                    # Has an extension, treat as an index file path
+                    self.index_dir = os.path.dirname(idx_candidate) or '.'
+                else:
+                    if os.path.exists(idx_candidate) and os.path.isfile(idx_candidate):
+                        # Exists as a file without extension -> treat as file path
+                        self.index_dir = os.path.dirname(idx_candidate) or '.'
+                        self.index_path = idx_candidate
+                    else:
+                        # Treat as a directory path
+                        self.index_dir = idx_candidate
+                        self.index_path = os.path.join(self.index_dir, 'faiss.index')
+        except Exception:
+            # Fallback to placing index under kb directory
+            self.index_dir = os.path.join('kb', 'vector_index')
+            self.index_path = os.path.join(self.index_dir, 'faiss.index')
+
+        # Ensure directories exist after normalization
+        os.makedirs(self.index_dir, exist_ok=True)
         os.makedirs(os.path.dirname(self.metadata_path), exist_ok=True)
         
         # Configuration
@@ -103,6 +129,8 @@ class UnifiedKnowledgeBase:
         self.vector_index = None
         self.chunks: List[DocumentChunk] = []
         self.metadata: Dict[str, Any] = {}
+        self.processed_files: set[str] = set()
+        self._next_faiss_id: int = 0
         
         # Register processors
         self._register_processors()
@@ -112,6 +140,26 @@ class UnifiedKnowledgeBase:
         
         # Load existing index if available
         self.load_index()
+
+    def _is_index_ip(self) -> bool:
+        """Best-effort detection whether current FAISS index uses Inner Product metric."""
+        if self.vector_db != 'faiss' or not FAISS_AVAILABLE or self.vector_index is None:
+            return True
+        try:
+            # Some FAISS wrappers (IndexIDMap2) expose inner index as `index`
+            inner_index = getattr(self.vector_index, 'index', self.vector_index)
+            type_name = type(inner_index).__name__
+            if 'L2' in type_name:
+                return False
+            if 'IP' in type_name:
+                return True
+            # Fall back to metric_type attribute if present (0=IP, 1=L2)
+            if hasattr(inner_index, 'metric_type'):
+                return int(getattr(inner_index, 'metric_type')) == 0
+        except Exception:
+            pass
+        # Default to IP to match our own created indices
+        return True
     
     def _register_processors(self):
         """Register all document processors."""
@@ -166,10 +214,18 @@ class UnifiedKnowledgeBase:
                 logger.error(f"Failed to process {file_path}: {result.error_message}")
                 return False
             
-            # Generate embeddings for chunks
-            for chunk in result.chunks:
-                embedding = self._generate_embedding(chunk.content)
-                chunk.embedding = embedding.tolist()
+            # Generate embeddings for chunks (batched for speed)
+            texts = [chunk.content for chunk in result.chunks]
+            try:
+                batch_embeddings = self.embedding_model.encode(
+                    texts, convert_to_numpy=True, batch_size=32, show_progress_bar=False
+                )
+            except Exception:
+                batch_embeddings = [self._generate_embedding(t) for t in texts]
+            for chunk, embedding in zip(result.chunks, batch_embeddings):
+                if isinstance(embedding, np.ndarray) and embedding.dtype != np.float32:
+                    embedding = embedding.astype(np.float32)
+                chunk.embedding = (embedding.tolist() if isinstance(embedding, np.ndarray) else embedding)
             
             # Add chunks to knowledge base
             start_index = len(self.chunks)
@@ -180,12 +236,35 @@ class UnifiedKnowledgeBase:
                 self._initialize_vector_index()
             
             # Add embeddings to index
-            embeddings = np.array([chunk.embedding for chunk in result.chunks])
-            if self.vector_db == 'faiss':
-                self.vector_index.add(embeddings)
+            embeddings = np.ascontiguousarray(
+                np.array([chunk.embedding for chunk in result.chunks], dtype=np.float32)
+            )
+            # Normalize embeddings if using IP
+            try:
+                if FAISS_AVAILABLE and self.vector_db == 'faiss':
+                    faiss.normalize_L2(embeddings)
+            except Exception:
+                pass
+            if self.vector_db == 'faiss' and FAISS_AVAILABLE:
+                try:
+                    num = embeddings.shape[0]
+                    # Prefer add_with_ids if available on the index
+                    if hasattr(self.vector_index, 'add_with_ids'):
+                        if not hasattr(self, '_next_faiss_id'):
+                            self._next_faiss_id = int(getattr(self.vector_index, 'ntotal', 0))
+                        ids = np.arange(self._next_faiss_id, self._next_faiss_id + num, dtype='int64')
+                        self.vector_index.add_with_ids(embeddings, ids)
+                        self._next_faiss_id += num
+                    else:
+                        self.vector_index.add(embeddings)
+                except Exception as e:
+                    logger.error(f"Failed to add embeddings to FAISS index: {e}")
+                    raise
             
             # Update metadata
             self._update_metadata(file_path, result, start_index)
+            # Track processed file for caching
+            self.processed_files.add(file_path)
             
             logger.info(f"Added {len(result.chunks)} chunks from {file_path}")
             return True
@@ -197,7 +276,8 @@ class UnifiedKnowledgeBase:
     def add_documents_from_directory(self, 
                                    directory: str, 
                                    recursive: bool = True,
-                                   file_patterns: List[str] = None) -> Tuple[int, int]:
+                                   file_patterns: List[str] = None,
+                                   force_reprocess: bool = False) -> Tuple[int, int]:
         """
         Add all supported documents from a directory.
         
@@ -237,6 +317,10 @@ class UnifiedKnowledgeBase:
         logger.info(f"Found {total_count} files to process in {directory}")
         
         for file_path in files_to_process:
+            # Skip already processed files unless reprocessing is forced
+            if not force_reprocess and hasattr(self, 'processed_files') and file_path in self.processed_files:
+                logger.info(f"Skipping already processed file: {file_path}")
+                continue
             if self.add_document(file_path):
                 successful_count += 1
             
@@ -269,8 +353,9 @@ class UnifiedKnowledgeBase:
         if not query.strip():
             return []
         
-        max_results = max_results or self.max_results
-        min_score = min_score or self.similarity_threshold
+        max_results = self.max_results if max_results is None else max_results
+        # Preserve 0.0 values; only default when None
+        min_score = self.similarity_threshold if min_score is None else float(min_score)
         
         try:
             # Detect query language and translate if needed
@@ -286,40 +371,85 @@ class UnifiedKnowledgeBase:
             
             # Generate query embedding
             query_embedding = self._generate_embedding(search_query)
+            # Ensure contiguous float32 for FAISS and normalize only for IP indices
+            if isinstance(query_embedding, np.ndarray) and query_embedding.dtype != np.float32:
+                query_embedding = query_embedding.astype(np.float32)
+            try:
+                if FAISS_AVAILABLE and isinstance(query_embedding, np.ndarray) and self.vector_db == 'faiss' and self._is_index_ip():
+                    vec = query_embedding.reshape(1, -1).copy()
+                    faiss.normalize_L2(vec)
+                    query_embedding = vec.reshape(-1)
+            except Exception:
+                pass
             
             # Search vector index
             if self.vector_index is None or len(self.chunks) == 0:
-                logger.warning("No documents in knowledge base")
-                return []
+                # Attempt to lazily load/rebuild once
+                if self.vector_index is None and self.chunks:
+                    try:
+                        self._rebuild_vector_index()
+                    except Exception:
+                        pass
+                if self.vector_index is None or len(self.chunks) == 0:
+                    logger.warning("No documents in knowledge base")
+                    return []
             
             # Perform vector search
             if self.vector_db == 'faiss':
                 scores, indices = self.vector_index.search(
-                    query_embedding.reshape(1, -1), 
+                    query_embedding.reshape(1, -1),
                     min(max_results * 2, len(self.chunks))  # Get more results for filtering
                 )
-                
+
+                # Determine metric type (IP vs L2) for filtering semantics
+                metric_is_ip = self._is_index_ip()
+
                 # Convert to results
-                results = []
-                for i, (score, idx) in enumerate(zip(scores[0], indices[0])):
-                    if idx < len(self.chunks) and score >= min_score:
-                        chunk = self.chunks[idx]
-                        
-                        # Apply filters
-                        if language and chunk.language != language:
-                            continue
-                        if file_types and not any(chunk.source_file.endswith(ft) for ft in file_types):
-                            continue
-                        
-                        results.append(SearchResult(
-                            chunk=chunk,
-                            score=float(score),
-                            rank=len(results) + 1
-                        ))
-                        
-                        if len(results) >= max_results:
-                            break
-                
+                results: List[SearchResult] = []
+                id_map = getattr(self, 'faiss_id_to_chunk_index', None)
+
+                for score, idx in zip(scores[0], indices[0]):
+                    # Map FAISS IDMap label to chunk index when applicable
+                    chunk_index = None
+                    if id_map and isinstance(idx, (int, np.integer)):
+                        chunk_index = id_map.get(int(idx))
+                    else:
+                        # Fall back to assuming contiguous indexing
+                        if 0 <= idx < len(self.chunks):
+                            chunk_index = int(idx)
+
+                    if chunk_index is None or not (0 <= chunk_index < len(self.chunks)):
+                        continue
+
+                    # Score filtering: for IP higher is better, for L2 lower is better
+                    passes_threshold = True
+                    if metric_is_ip:
+                        passes_threshold = (score >= min_score)
+                    else:
+                        # For L2 distance, do not apply min_score cutoff (incompatible scale)
+                        # Keep top-k as returned by FAISS
+                        passes_threshold = True
+
+                    if not passes_threshold:
+                        continue
+
+                    chunk = self.chunks[chunk_index]
+
+                    # Apply filters
+                    if language and chunk.language != language:
+                        continue
+                    if file_types and not any(chunk.source_file.endswith(ft) for ft in file_types):
+                        continue
+
+                    results.append(SearchResult(
+                        chunk=chunk,
+                        score=float(score),
+                        rank=len(results) + 1
+                    ))
+
+                    if len(results) >= max_results:
+                        break
+
                 return results
             
         except Exception as e:
@@ -396,26 +526,63 @@ class UnifiedKnowledgeBase:
     def load_index(self) -> bool:
         """Load the vector index and metadata from disk."""
         try:
-            # Load metadata first
-            if not os.path.exists(self.metadata_path):
-                logger.info("No existing metadata found, starting fresh")
-                return True
-            
-            with open(self.metadata_path, 'r', encoding='utf-8') as f:
+            # The build script creates a mapping.json, not metadata.json.
+            # We will check for mapping.json for compatibility.
+            metadata_path_to_check = self.metadata_path
+            if not os.path.exists(metadata_path_to_check):
+                logger.warning(f"{self.metadata_path} not found.")
+                # The dataset builder saved mapping as metadata.json; also check mapping.json for future compatibility
+                map_path = os.path.join(os.path.dirname(self.metadata_path), "mapping.json")
+                if os.path.exists(map_path):
+                    logger.info(f"Found {map_path} instead. Attempting to load.")
+                    metadata_path_to_check = map_path
+                else:
+                    logger.info("No existing metadata or mapping file found, starting fresh.")
+                    return True
+
+            with open(metadata_path_to_check, 'r', encoding='utf-8') as f:
                 data = json.load(f)
+
+            # Handle both metadata and mapping file structures
+            if 'chunks' in data:
+                self.chunks = [DocumentChunk.from_dict(chunk_data) for chunk_data in data.get('chunks', [])]
+                self.metadata = data.get('metadata', {})
+                self.processed_files = set(self.metadata.keys())
+                self.faiss_id_to_chunk_index = {}
+            else: # This is a mapping file from the build script (id -> {chunk_id, text, metadata, hash})
+                self.chunks = []
+                self.faiss_id_to_chunk_index = {}
+                for label_str, chunk_data in data.items():
+                    # Remove unsupported keys and map fields
+                    if 'hash' in chunk_data:
+                        chunk_data = {k: v for k, v in chunk_data.items() if k != 'hash'}
+                    # DocumentChunk.from_dict handles 'chunk_id' -> 'id' and 'text' -> 'content'
+                    # Ensure minimal fields
+                    if 'metadata' in chunk_data and isinstance(chunk_data['metadata'], dict):
+                        meta = chunk_data['metadata']
+                        if 'source' in meta and 'source_file' not in chunk_data:
+                            chunk_data['source_file'] = meta.get('source', '')
+                        if 'language' in meta and 'language' not in chunk_data:
+                            chunk_data['language'] = meta.get('language', 'en')
+                    doc_chunk = DocumentChunk.from_dict(chunk_data)
+                    self.faiss_id_to_chunk_index[int(label_str)] = len(self.chunks)
+                    self.chunks.append(doc_chunk)
+
+            # Load vector index. Accept both file and directory inputs for index_path
+            if self.vector_db == 'faiss':
+                index_file_path = self.index_path
+                if os.path.isdir(index_file_path):
+                    index_file_path = os.path.join(index_file_path, 'faiss.index')
+                if os.path.exists(index_file_path):
+                    self.vector_index = faiss.read_index(index_file_path)
+                    self.index_path = index_file_path
+                    logger.info(f"Successfully loaded FAISS index from {index_file_path} with {self.vector_index.ntotal} vectors.")
+                else:
+                    if self.chunks:
+                        logger.warning("FAISS index file not found. Rebuilding index from loaded chunks.")
+                        self._rebuild_vector_index()
             
-            # Load chunks
-            self.chunks = [DocumentChunk.from_dict(chunk_data) for chunk_data in data.get('chunks', [])]
-            self.metadata = data.get('metadata', {})
-            
-            # Load vector index
-            if os.path.exists(self.index_path) and self.vector_db == 'faiss':
-                self.vector_index = faiss.read_index(self.index_path)
-            elif self.chunks:
-                # Rebuild index if chunks exist but index doesn't
-                self._rebuild_vector_index()
-            
-            logger.info(f"Loaded knowledge base with {len(self.chunks)} chunks")
+            logger.info(f"Loaded knowledge base with {len(self.chunks)} chunks.")
             return True
             
         except Exception as e:
@@ -431,12 +598,25 @@ class UnifiedKnowledgeBase:
         if self.embedding_model is None:
             raise RuntimeError("Embedding model not initialized")
         
-        return self.embedding_model.encode(text, convert_to_numpy=True)
+        embedding = self.embedding_model.encode(text, convert_to_numpy=True)
+        # Ensure correct dtype for FAISS
+        if isinstance(embedding, np.ndarray) and embedding.dtype != np.float32:
+            embedding = embedding.astype(np.float32)
+        # Normalize for cosine similarity when using Inner Product
+        try:
+            if FAISS_AVAILABLE and isinstance(embedding, np.ndarray):
+                vec = embedding.reshape(1, -1).copy()
+                faiss.normalize_L2(vec)
+                embedding = vec.reshape(-1)
+        except Exception:
+            pass
+        return embedding
     
     def _initialize_vector_index(self):
         """Initialize the vector index."""
         if self.vector_db == 'faiss' and FAISS_AVAILABLE:
-            self.vector_index = faiss.IndexFlatIP(self.embedding_dimension)  # Inner product for similarity
+            # Use inner product with normalized vectors to approximate cosine similarity
+            self.vector_index = faiss.IndexFlatIP(self.embedding_dimension)
         else:
             raise RuntimeError(f"Vector database {self.vector_db} not available or supported")
     
@@ -460,8 +640,13 @@ class UnifiedKnowledgeBase:
                 embeddings.append(chunk.embedding)
         
         # Add to index
-        if embeddings and self.vector_db == 'faiss':
-            embeddings_array = np.array(embeddings)
+        if embeddings and self.vector_db == 'faiss' and FAISS_AVAILABLE:
+            embeddings_array = np.ascontiguousarray(np.array(embeddings, dtype=np.float32))
+            # Normalize to unit length for IP similarity
+            try:
+                faiss.normalize_L2(embeddings_array)
+            except Exception:
+                pass
             self.vector_index.add(embeddings_array)
         
         logger.info(f"Rebuilt vector index with {len(embeddings)} embeddings")

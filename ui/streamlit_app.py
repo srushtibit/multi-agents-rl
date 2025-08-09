@@ -176,8 +176,12 @@ class SupportSystemDashboard:
             st.session_state.coordinator.register_agent(st.session_state.critic_agent)
             st.session_state.coordinator.register_agent(st.session_state.escalation_agent)
             
-            # Initialize RL components
-            st.session_state.rl_agent = REINFORCEAgent(st.session_state.communication_agent)
+            # Initialize RL components (optional; only if communication agent supports encoder)
+            try:
+                _ = st.session_state.communication_agent.encoder  # probe optional attribute
+                st.session_state.rl_agent = REINFORCEAgent(st.session_state.communication_agent)
+            except Exception:
+                st.session_state.rl_agent = None
             st.session_state.environment = SupportEnvironment()
             st.session_state.task_generator = SupportTaskGenerator()
             
@@ -307,23 +311,48 @@ class SupportSystemDashboard:
                         </div>
                         """, unsafe_allow_html=True)
                         
-                        # Bot response (left side)
-                        if 'chat_response' in exchange and exchange['chat_response']:
+                        # Bot response (left side) - use chat_response if available, fallback to response
+                        if exchange.get('processing'):
+                            # Show loading state with animated dots
                             st.markdown(f"""
                             <div class="message-agent">
-                                🤖 {exchange['chat_response']}
+                                🤖 <span style="opacity: 0.7;">Thinking</span>
+                                <span class="loading-dots">
+                                    <span>.</span><span>.</span><span>.</span>
+                                </span>
                             </div>
+                            <style>
+                            .loading-dots span {{
+                                animation: loading 1.4s infinite ease-in-out both;
+                                display: inline-block;
+                            }}
+                            .loading-dots span:nth-child(1) {{ animation-delay: -0.32s; }}
+                            .loading-dots span:nth-child(2) {{ animation-delay: -0.16s; }}
+                            @keyframes loading {{
+                                0%, 80%, 100% {{ transform: scale(0); }}
+                                40% {{ transform: scale(1); }}
+                            }}
+                            </style>
                             """, unsafe_allow_html=True)
+                        else:
+                            display_response = exchange.get('chat_response') or exchange.get('response')
+                            if display_response:
+                                # Escape HTML in the response to prevent raw HTML display
+                                import html
+                                safe_response = html.escape(str(display_response))
+                                st.markdown(f"""
+                                <div class="message-agent">
+                                    🤖 {safe_response}
+                                </div>
+                                """, unsafe_allow_html=True)
                             
                             # Thinking process button (if detailed info available)
-                            if ('response' in exchange and exchange['response'] is not None) or \
-                               ('agent_conversation' in exchange and exchange['agent_conversation']) or \
-                               ('evaluation' in exchange and exchange['evaluation'] is not None):
-                                
-                                thinking_details = self._format_thinking_details(exchange)
-                                if thinking_details:
-                                    with st.expander("🤔 Show thinking process"):
-                                        st.markdown(thinking_details, unsafe_allow_html=True)
+                            if ('agent_conversation' in exchange and exchange['agent_conversation']) or \
+                               ('evaluation' in exchange and exchange['evaluation'] is not None) or \
+                               ('retrieved_docs' in exchange and exchange['retrieved_docs']):
+
+                                with st.expander("🤔 Show thinking process"):
+                                    self._render_thinking_process(exchange)
                     
                     st.markdown('</div>', unsafe_allow_html=True)
             else:
@@ -344,7 +373,24 @@ class SupportSystemDashboard:
             submitted = st.form_submit_button("📤 Send")
         
         if submitted and query.strip():
-            asyncio.run(self._process_query(query))
+            # Immediately add user message to show it in the chat
+            user_entry = {
+                'timestamp': datetime.now().isoformat(),
+                'query': query,
+                'language': 'en',  # Will be detected later
+                'response': None,  # Will be filled after processing
+                'chat_response': None,
+                'agent_conversation': [],
+                'symbolic_encoding': None,
+                'evaluation': None,
+                'retrieved_docs': None,
+                'processing': True  # Flag to show loading state
+            }
+            st.session_state.conversation_history.append(user_entry)
+
+            # Process the query with spinner
+            with st.spinner("🤖 Agents are processing your request..."):
+                asyncio.run(self._process_query(query, len(st.session_state.conversation_history) - 1))
         
         # Quick examples and utilities
         st.markdown("### 🎯 Quick Examples")
@@ -359,13 +405,43 @@ class SupportSystemDashboard:
         for col, example in zip(cols, example_queries):
             with col:
                 if st.button(example, key=f"example_{example}"):
-                    asyncio.run(self._process_query(example))
-        
+                    # Add user message immediately for examples too
+                    user_entry = {
+                        'timestamp': datetime.now().isoformat(),
+                        'query': example,
+                        'language': 'en',
+                        'response': None,
+                        'chat_response': None,
+                        'agent_conversation': [],
+                        'symbolic_encoding': None,
+                        'evaluation': None,
+                        'retrieved_docs': None,
+                        'processing': True
+                    }
+                    st.session_state.conversation_history.append(user_entry)
+                    with st.spinner("🤖 Agents are processing your request..."):
+                        asyncio.run(self._process_query(example, len(st.session_state.conversation_history) - 1))
+
         col_util_1, col_util_2 = st.columns([1, 1])
         with col_util_1:
             if st.button("🎲 Random Query"):
                 random_task = st.session_state.task_generator.generate_task()
-                asyncio.run(self._process_query(random_task.user_query))
+                # Add user message immediately for random query too
+                user_entry = {
+                    'timestamp': datetime.now().isoformat(),
+                    'query': random_task.user_query,
+                    'language': 'en',
+                    'response': None,
+                    'chat_response': None,
+                    'agent_conversation': [],
+                    'symbolic_encoding': None,
+                    'evaluation': None,
+                    'retrieved_docs': None,
+                    'processing': True
+                }
+                st.session_state.conversation_history.append(user_entry)
+                with st.spinner("🤖 Agents are processing your request..."):
+                    asyncio.run(self._process_query(random_task.user_query, len(st.session_state.conversation_history) - 1))
         with col_util_2:
             if st.button("🔄 Clear"):
                 st.session_state.current_query = ""
@@ -533,6 +609,9 @@ class SupportSystemDashboard:
         st.markdown("### 📊 Training Statistics")
         
         try:
+            if st.session_state.rl_agent is None:
+                st.info("RL training is unavailable because the communication agent does not expose an encoder.")
+                return
             training_stats = st.session_state.rl_agent.get_training_stats()
             
             if training_stats:
@@ -605,25 +684,24 @@ class SupportSystemDashboard:
         
         # Search interface
         st.markdown("### 🔍 Knowledge Base Search")
-        
-        search_query = st.text_input(
-            "Search Query",
-            placeholder="Enter search terms..."
-        )
-        
-        col1, col2, col3 = st.columns(3)
-        
-        with col1:
-            max_results = st.number_input("Max Results", min_value=1, max_value=50, value=10)
-        
-        with col2:
-            min_score = st.slider("Min Similarity Score", 0.0, 1.0, 0.7, format="%.2f")
-        
-        with col3:
-            search_language = st.selectbox("Search Language", ['all', 'en', 'es', 'de', 'fr'])
-        
-        if search_query and st.button("🔍 Search"):
-            self._search_knowledge_base(search_query, max_results, min_score, search_language)
+
+        with st.form(key="kb_search_form", clear_on_submit=False):
+            search_query = st.text_input(
+                "Search Query",
+                placeholder="Enter search terms...",
+                key="kb_search_input"
+            )
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                max_results = st.number_input("Max Results", min_value=1, max_value=50, value=10, key="kb_max_results")
+            with col2:
+                min_score = st.slider("Min Similarity Score", 0.0, 1.0, 0.7, format="%.2f", key="kb_min_score")
+            with col3:
+                search_language = st.selectbox("Search Language", ['all', 'en', 'es', 'de', 'fr'], key="kb_lang")
+            search_submitted = st.form_submit_button("🔍 Search")
+        if search_submitted and search_query:
+            with st.spinner("🔎 Searching knowledge base..."):
+                self._search_knowledge_base(search_query, max_results, min_score, search_language)
         
         # Knowledge base statistics
         st.markdown("### 📊 Knowledge Base Statistics")
@@ -790,7 +868,7 @@ class SupportSystemDashboard:
         for key, value in system_info.items():
             st.text(f"{key}: {value}")
     
-    async def _process_query(self, query: str):
+    async def _process_query(self, query: str, conversation_index: int = None):
         """Process a user query through the multi-agent system."""
         if not st.session_state.system_initialized or not query.strip():
             return
@@ -813,58 +891,123 @@ class SupportSystemDashboard:
                 st.session_state.coordinator.start_all_agents()
 
             # Process through communication agent
-            st.session_state.communication_agent.receive_message(user_message)
-            
-            # Run system cycles
-            response_received = False
-            final_response = ""
-            evaluation_result = None
-            symbolic_encoding = None
-            agent_conversation = []  # Track inter-agent conversation
-            
-            for cycle_num in range(10):  # Max 10 cycles
-                messages = await st.session_state.coordinator.run_cycle() or []
+            initial_response = await st.session_state.communication_agent.process_message(user_message)
+
+            # Check if communication agent handled it directly (e.g., greeting)
+            if initial_response and initial_response.recipient == "user":
+                # Direct response from communication agent - no need for further processing
+                final_response = initial_response.content
+                agent_conversation = [{
+                    'cycle': 1,
+                    'sender': 'communication_agent',
+                    'recipient': 'user',
+                    'type': 'response',
+                    'content': final_response,
+                    'timestamp': datetime.now().strftime("%H:%M:%S")
+                }]
+                response_received = True
+                evaluation_result = None
+                symbolic_encoding = None
+            else:
+                # Continue with full processing pipeline
+                st.session_state.communication_agent.receive_message(user_message)
+
+                # Run system cycles
+                response_received = False
+                final_response = ""
+                evaluation_result = None
+                symbolic_encoding = None
+                agent_conversation = []  # Track inter-agent conversation
+
+                for cycle_num in range(5):  # Allow enough cycles for retrieval → communication → critic
+                    messages = await st.session_state.coordinator.run_cycle() or []
                 
-                for message in messages:
-                    # Record all inter-agent messages
-                    agent_conversation.append({
-                        'cycle': cycle_num + 1,
-                        'sender': message.sender,
-                        'recipient': message.recipient,
-                        'type': message.type.value,
-                        'content': message.content[:200] + "..." if len(message.content) > 200 else message.content,
-                        'timestamp': datetime.now().strftime("%H:%M:%S")
-                    })
-                    
-                    if message.type == MessageType.RESPONSE and (message.sender == "retrieval_agent" or message.recipient == "user"):
-                        final_response = message.content
-                        response_received = True
-                    
-                    elif message.type == MessageType.SYMBOLIC and message.sender == "communication_agent":
-                        symbolic_encoding = message.symbolic_encoding
-                    
-                    elif message.type == MessageType.FEEDBACK and "evaluation_result" in message.metadata:
-                        evaluation_result = message.metadata["evaluation_result"]
-                
-                if response_received:
-                    break
+                    for message in messages:
+                        # Record all inter-agent messages
+                        # Escape special HTML characters to prevent raw HTML rendering
+                        def _escape_html(text: str) -> str:
+                            try:
+                                return (text.replace('&', '&amp;')
+                                            .replace('<', '&lt;')
+                                            .replace('>', '&gt;'))
+                            except Exception:
+                                return text
+
+                        safe_content = message.content
+                        if isinstance(safe_content, str):
+                            # Strip any raw HTML to avoid leaking tags into the UI and hide <think> blocks
+                            import re as _re
+                            no_html = _re.sub(r"<[^>]+>", "", safe_content)
+                            no_think = no_html
+                            if "<think>" in safe_content:
+                                # Remove think blocks if any slipped through
+                                no_think = _re.sub(r"<think>[\s\S]*?</think>", "", safe_content, flags=_re.IGNORECASE)
+                                no_think = _re.sub(r"<[^>]+>", "", no_think)
+                            truncated = no_think[:400] + "..." if len(no_think) > 400 else no_think
+                            safe_content = _escape_html(truncated)
+
+                        agent_conversation.append({
+                            'cycle': cycle_num + 1,
+                            'sender': message.sender,
+                            'recipient': message.recipient,
+                            'type': message.type.value,
+                            'content': safe_content,
+                            'timestamp': datetime.now().strftime("%H:%M:%S")
+                        })
+
+                        # Prefer the final, user-directed response from the critic agent
+                        if message.type == MessageType.RESPONSE and message.recipient == "user":
+                            final_response = message.content
+                            # Capture evaluation and retrieved docs if provided by the critic
+                            if isinstance(message.metadata, dict):
+                                if message.metadata.get("evaluation"):
+                                    evaluation_result = message.metadata.get("evaluation")
+                                if message.metadata.get("retrieved_docs"):
+                                    st.session_state.last_retrieved_docs = message.metadata.get("retrieved_docs")
+                            response_received = True
+
+                        elif message.type == MessageType.SYMBOLIC and message.sender == "communication_agent":
+                            symbolic_encoding = message.symbolic_encoding
+
+                        elif message.type == MessageType.FEEDBACK and isinstance(message.metadata, dict) and "evaluation_result" in message.metadata:
+                            evaluation_result = message.metadata.get("evaluation_result")
+
+                    if response_received:
+                        break
             
             # Generate chat-like response from detailed search results
             chat_response = self._generate_chat_response(final_response, query)
             
-            # Record conversation
-            conversation_entry = {
-                'timestamp': datetime.now().isoformat(),
-                'query': query,
-                'language': language_result.language,
-                'response': final_response or "No response generated",
-                'chat_response': chat_response,
-                'agent_conversation': agent_conversation,
-                'symbolic_encoding': symbolic_encoding,
-                'evaluation': evaluation_result
-            }
-            
-            st.session_state.conversation_history.append(conversation_entry)
+            # Update existing conversation entry or create new one
+            if conversation_index is not None and conversation_index < len(st.session_state.conversation_history):
+                # Update existing entry
+                entry = st.session_state.conversation_history[conversation_index]
+                entry.update({
+                    'language': language_result.language,
+                    'response': final_response or "No response generated",
+                    'chat_response': chat_response,
+                    'agent_conversation': agent_conversation,
+                    'symbolic_encoding': symbolic_encoding,
+                    'evaluation': evaluation_result,
+                    'retrieved_docs': st.session_state.get('last_retrieved_docs'),
+                    'processing': False  # Remove processing flag
+                })
+            else:
+                # Create new conversation entry (fallback)
+                conversation_entry = {
+                    'timestamp': datetime.now().isoformat(),
+                    'query': query,
+                    'language': language_result.language,
+                    'response': final_response or "No response generated",
+                    'chat_response': chat_response,
+                    'agent_conversation': agent_conversation,
+                    'symbolic_encoding': symbolic_encoding,
+                    'evaluation': evaluation_result,
+                    'retrieved_docs': st.session_state.get('last_retrieved_docs'),
+                    'processing': False
+                }
+                st.session_state.conversation_history.append(conversation_entry)
+
             st.success("✅ Query processed successfully!")
             st.rerun()
         
@@ -874,135 +1017,182 @@ class SupportSystemDashboard:
     
     def _generate_chat_response(self, detailed_response: str, query: str) -> str:
         """Generate a concise, chat-like response from detailed search results."""
-        
+
         # Handle simple greetings and casual conversation
         query_lower = query.lower().strip()
         simple_greetings = ['hi', 'hello', 'hey', 'good morning', 'good afternoon', 'good evening', 'how are you', 'what\'s up', 'sup']
-        
+
         if any(greeting in query_lower for greeting in simple_greetings):
             return "Hello! 👋 I'm your AI support assistant. I'm here to help you with any technical issues, account problems, or questions you might have. How can I assist you today?"
-        
+
         if not detailed_response or detailed_response == "No response generated":
             return "I'm sorry, I couldn't find any relevant information for your query. Please try rephrasing your question or contact support for assistance."
-        
-        # Extract the main solution from the first result
-        try:
-            lines = detailed_response.split('\n')
-            first_result = None
-            solution = None
-            
-            # Find the first result and extract its solution
-            for i, line in enumerate(lines):
-                if line.strip().startswith('1.') and 'Title:' in line:
-                    # Extract title
-                    title_start = line.find('Title:') + 6
-                    title_end = line.find('Description:')
-                    if title_end == -1:
-                        title_end = len(line)
-                    title = line[title_start:title_end].strip()
-                    
-                    # Look for solution in subsequent lines
-                    for j in range(i, min(i + 5, len(lines))):
-                        if 'Solution:' in lines[j]:
-                            solution_start = lines[j].find('Solution:') + 9
-                            solution = lines[j][solution_start:].strip()
-                            break
-                    
-                    first_result = title
-                    break
-            
-            # Generate chat response based on query type
-            if 'password' in query_lower and 'reset' in query_lower:
-                if solution:
-                    return f"For password reset issues, here's what you can do: {solution}"
-                return "For password reset issues, please check your spam folder, verify your email address, and ensure the email service is configured correctly."
-            
-            elif 'access' in query_lower or 'login' in query_lower or 'dashboard' in query_lower:
-                if solution:
-                    return f"To resolve access issues: {solution}"
-                return "For access problems, please verify your credentials, check your account status, and ensure you have the proper permissions."
-            
-            elif 'slow' in query_lower or 'performance' in query_lower:
-                if solution:
-                    return f"To improve performance: {solution}"
-                return "For performance issues, try clearing your browser cache, checking your network connection, and restarting the application."
-            
-            elif 'upload' in query_lower or 'file' in query_lower:
-                if solution:
-                    return f"For file upload problems: {solution}"
-                return "For file upload issues, check the file size limits, verify the file format is supported, and try using a different browser."
-            
-            elif 'email' in query_lower or 'notification' in query_lower:
-                if solution:
-                    return f"To fix email notification issues: {solution}"
-                return "For email notification problems, check the email service configuration, verify SMTP settings, and test email connectivity."
-            
-            elif 'leaves' in query_lower or 'leave' in query_lower:
-                return "If your leave applications aren't showing on the panel, please check: 1) Ensure you've submitted your leave request through the correct system, 2) Verify you're looking in the right section (My Leaves, Leave History, etc.), 3) Check if there are any pending approvals needed, 4) Contact HR if your approved leaves still don't appear after 24 hours."
-            
-            else:
-                # Generic response with the first solution found
-                if solution and first_result:
-                    return f"I found a solution for '{first_result}': {solution}"
-                elif first_result:
-                    # Try to extract a useful response even without explicit solution
-                    if 'access' in first_result.lower() or 'dashboard' in first_result.lower():
-                        return "It seems you're having trouble accessing a system or dashboard. Try verifying your login credentials, checking your account permissions, and ensuring your account is active. If the issue persists, contact your system administrator."
-                    elif 'password' in first_result.lower():
-                        return "For password-related issues, first check your spam/junk folder for reset emails. Make sure you're using the correct email address and that your account isn't locked. If you still can't reset your password, contact support."
-                    elif 'email' in first_result.lower() or 'notification' in first_result.lower():
-                        return "Email notification issues are usually caused by incorrect email settings. Check that your email address is correct in your profile, verify SMTP configuration, and ensure emails aren't being blocked by your email provider."
-                    elif 'slow' in first_result.lower() or 'performance' in first_result.lower():
-                        return "For performance issues, try clearing your browser cache and cookies, check your internet connection, and close other applications that might be using system resources. If using a web application, try a different browser."
-                    elif 'upload' in first_result.lower() or 'file' in first_result.lower():
-                        return "File upload problems are often due to file size limits or unsupported formats. Check that your file is under the size limit, in a supported format (PDF, JPG, PNG, DOC, etc.), and try using a different browser if the issue continues."
-                    else:
-                        return f"Based on similar cases like '{first_result}', I recommend checking your account settings, verifying your permissions, and ensuring all system requirements are met. If the problem continues, contact technical support with specific error details."
+
+        # Clean and process the detailed response
+        # The retrieval agent returns bullet points, so let's work with that format
+        response_lines = [line.strip() for line in detailed_response.split('\n') if line.strip()]
+
+        # If the response is already in a good format (bullet points), use it directly
+        if any(line.startswith(('-', '*', '•')) for line in response_lines):
+            # Clean up the bullet points and make them more conversational
+            cleaned_bullets = []
+            for line in response_lines:
+                if line.startswith(('-', '*', '•')):
+                    # Remove bullet and clean up
+                    clean_line = line[1:].strip()
+                    if clean_line and len(clean_line) > 10:  # Skip very short lines
+                        cleaned_bullets.append(clean_line)
+
+            if cleaned_bullets:
+                # Create a conversational response
+                if len(cleaned_bullets) == 1:
+                    return f"Here's what I found to help with your issue: {cleaned_bullets[0]}"
                 else:
-                    # Last resort - be more helpful than just "check detailed results"
-                    return "I couldn't find an exact match for your issue, but here are some general troubleshooting steps: 1) Check your account permissions and settings, 2) Clear your browser cache and cookies, 3) Try logging out and back in, 4) Contact support if the issue persists with specific error messages."
-        
-        except Exception:
-            # Fallback for any parsing errors - still be helpful
-            if 'password' in query_lower:
-                return "For password issues, check your spam folder for reset emails and verify your email address is correct."
-            elif 'access' in query_lower or 'login' in query_lower:
-                return "For access problems, verify your credentials and check that your account is active."
-            elif 'slow' in query_lower or 'performance' in query_lower:
-                return "For performance issues, try clearing your browser cache and checking your internet connection."
+                    response = "Here's what I found to help with your issue:\n\n"
+                    for i, bullet in enumerate(cleaned_bullets[:4], 1):  # Limit to 4 points
+                        response += f"{i}. {bullet}\n"
+                    return response.strip()
+
+        # If no bullet points, try to extract useful information from the response
+        # Look for common patterns and provide contextual help based on query type
+
+        # Try to extract meaningful content from the response
+        meaningful_content = ""
+        for line in response_lines:
+            # Skip metadata-like lines
+            if any(skip_word in line.lower() for skip_word in ['ticket', 'complaint id', 'employee name', 'domain', 'priority', 'queue', 'business type', 'tag', 'language', 'source:']):
+                continue
+            # Look for resolution or answer content
+            if any(key_word in line.lower() for key_word in ['resolution:', 'answer:', 'solution:', 'steps:']):
+                meaningful_content = line
+                break
+            # If line is substantial, use it
+            elif len(line) > 20 and not line.startswith(('ticket', 'complaint', 'employee')):
+                meaningful_content = line
+                break
+
+        # Generate contextual responses based on query type
+        if 'password' in query_lower and 'reset' in query_lower:
+            if meaningful_content:
+                return f"For password reset issues, here's what I found: {meaningful_content}"
+            return "For password reset issues, please check your spam folder, verify your email address, and ensure the email service is configured correctly."
+
+        elif 'access' in query_lower or 'login' in query_lower or 'dashboard' in query_lower:
+            if meaningful_content:
+                return f"To resolve access issues: {meaningful_content}"
+            return "For access problems, please verify your credentials, check your account status, and ensure you have the proper permissions."
+
+        elif 'slow' in query_lower or 'performance' in query_lower:
+            if meaningful_content:
+                return f"To improve performance: {meaningful_content}"
+            return "For performance issues, try clearing your browser cache, checking your network connection, and restarting the application."
+
+        elif 'upload' in query_lower or 'file' in query_lower:
+            if meaningful_content:
+                return f"For file upload problems: {meaningful_content}"
+            return "For file upload issues, check the file size limits, verify the file format is supported, and try using a different browser."
+
+        elif 'email' in query_lower or 'notification' in query_lower:
+            if meaningful_content:
+                return f"To fix email notification issues: {meaningful_content}"
+            return "For email notification problems, check the email service configuration, verify SMTP settings, and test email connectivity."
+
+        elif 'leaves' in query_lower or 'leave' in query_lower:
+            if meaningful_content:
+                return f"Regarding leave applications: {meaningful_content}"
+            return "If your leave applications aren't showing on the panel, please check: 1) Ensure you've submitted your leave request through the correct system, 2) Verify you're looking in the right section (My Leaves, Leave History, etc.), 3) Check if there are any pending approvals needed, 4) Contact HR if your approved leaves still don't appear after 24 hours."
+
+        else:
+            # Generic response - use meaningful content if found, otherwise provide helpful fallback
+            if meaningful_content:
+                return f"Here's what I found to help with your issue: {meaningful_content}"
             else:
-                return "I'm here to help! Try checking your account settings and permissions first. If the issue persists, contact support with specific details about what you're experiencing."
+                # Provide helpful general guidance
+                return "I found some information that might help, but let me provide some general troubleshooting steps: 1) Check your account permissions and settings, 2) Clear your browser cache and cookies, 3) Try logging out and back in, 4) Contact support if the issue persists with specific error messages."
     
     def _format_thinking_details(self, exchange: dict) -> str:
         """Format the thinking process details for the expandable section."""
+        import html
+
         details = []
-        
-        # Add detailed search results
-        if 'response' in exchange and exchange['response'] is not None:
+
+        # Helper function to safely escape HTML content
+        def safe_html_escape(text: str) -> str:
+            if not text:
+                return ""
+            return html.escape(str(text))
+
+        # 1) Communication → Retrieval (what was asked)
+        com_to_ret = None
+        for msg in exchange.get('agent_conversation', []) or []:
+            if msg.get('sender') == 'communication_agent' and msg.get('recipient') == 'retrieval_agent':
+                com_to_ret = msg
+                break
+        if com_to_ret:
+            safe_content = safe_html_escape(com_to_ret.get('content', ''))
             details.append(f"""
-            <div style="background-color: #f8f9fa; color: #212529; padding: 1rem; border-radius: 0.5rem; border-left: 4px solid #17a2b8; margin: 0.5rem 0;">
-                <strong style="color: #17a2b8;">🔍 Knowledge Base Search Results:</strong><br>
-                <span style="color: #495057;">{exchange['response']}</span>
+            <div style="background-color: #eef6ff; color: #212529; padding: 0.75rem; border-radius: 0.5rem; border-left: 4px solid #1e88e5; margin: 0.5rem 0;">
+                <strong style="color: #1e88e5;">1) Communication → Retrieval</strong><br>
+                <span style="color: #374151;">{safe_content}</span>
             </div>
             """)
-        
-        # Add agent conversation
-        if 'agent_conversation' in exchange and exchange['agent_conversation']:
-            details.append('<div style="margin: 0.5rem 0;"><strong style="color: #1976d2;">🤖 Agent Communication:</strong></div>')
-            
-            for msg in exchange['agent_conversation']:
-                sender_emoji = "🗣️" if msg['sender'] == "communication_agent" else "🔍" if msg['sender'] == "retrieval_agent" else "🤖"
-                recipient_emoji = "🗣️" if msg['recipient'] == "communication_agent" else "🔍" if msg['recipient'] == "retrieval_agent" else "🤖"
-                
-                details.append(f"""
-                <div style="background-color: #f1f3f4; color: #212529; padding: 0.5rem; margin: 0.25rem 0; border-radius: 0.25rem; font-size: 0.9em;">
-                    <strong style="color: #1f2937;">Cycle {msg['cycle']} - {msg['timestamp']}</strong><br>
-                    {sender_emoji} <strong style="color: #374151;">{msg['sender'].replace('_', ' ').title()}</strong> 
-                    → {recipient_emoji} <strong style="color: #374151;">{msg['recipient'].replace('_', ' ').title()}</strong> 
-                    (<em style="color: #6b7280;">{msg['type']}</em>)<br>
-                    <span style="color: #4b5563;">{msg['content']}</span>
-                </div>
-                """)
+
+        # 2) Retrieval → Communication (what came back)
+        ret_to_com = None
+        for msg in exchange.get('agent_conversation', []) or []:
+            if msg.get('sender') == 'retrieval_agent' and msg.get('recipient') == 'communication_agent' and msg.get('type') == 'response':
+                ret_to_com = msg
+                break
+        if ret_to_com:
+            safe_content = safe_html_escape(ret_to_com.get('content', ''))
+            details.append(f"""
+            <div style="background-color: #f1f3f4; color: #212529; padding: 0.75rem; border-radius: 0.5rem; border-left: 4px solid #6c757d; margin: 0.5rem 0;">
+                <strong style="color: #6c757d;">2) Retrieval → Communication</strong><br>
+                <span style="color: #374151;">{safe_content}</span>
+            </div>
+            """)
+
+        # 3) Short summary (from critic feedback if available)
+        summary_text = None
+        eval_data = exchange.get('evaluation') if isinstance(exchange.get('evaluation'), dict) else None
+        if eval_data and isinstance(eval_data.get('feedback'), str):
+            summary_text = eval_data.get('feedback')
+        elif exchange.get('retrieved_docs'):
+            top = exchange['retrieved_docs'][0]
+            top_src = top.get('chunk',{}).get('source_file','')
+            summary_text = f"Selected top results by similarity; leading source: {top_src}."
+        if summary_text:
+            safe_summary = safe_html_escape(summary_text)
+            details.append(f"""
+            <div style="background-color: #fffbe6; color: #212529; padding: 0.75rem; border-radius: 0.5rem; border-left: 4px solid #fbc02d; margin: 0.5rem 0;">
+                <strong style="color: #fbc02d;">3) Summary</strong><br>
+                <span style="color: #374151;">{safe_summary}</span>
+            </div>
+            """)
+
+        # Show retrieved docs from metadata if present
+        retrieved_docs = exchange.get('retrieved_docs')
+
+        if not retrieved_docs and isinstance(exchange.get('response'), dict) and 'retrieved_docs' in exchange['response']:
+            retrieved_docs = exchange['response']['retrieved_docs']
+
+        if retrieved_docs:
+            details.append('<div style="margin: 0.5rem 0;"><strong style="color: #1976d2;">4) 📄 Documents Consulted:</strong></div>')
+            for i, doc in enumerate(retrieved_docs[:5]):
+                try:
+                    src = safe_html_escape(doc['chunk']['source_file'])
+                    snippet = doc['chunk']['content'][:220] + ('...' if len(doc['chunk']['content']) > 220 else '')
+                    safe_snippet = safe_html_escape(snippet)
+                    score = doc.get('score', 0)
+                    details.append(
+                        f'<div style="background-color: #f9fafb; color: #212529; padding: 0.5rem; margin: 0.25rem 0; border-radius: 0.25rem; font-size: 0.9em;">'
+                        f'<strong>Doc {i+1}</strong> — <em>{src}</em><br>'
+                        f'<span style="color:#6b7280;">Score: {score:.3f}</span><br>'
+                        f'<span style="color:#374151;">{safe_snippet}</span>'
+                        f'</div>'
+                    )
+                except Exception:
+                    continue
         
         # Add evaluation metrics
         if 'evaluation' in exchange and exchange['evaluation'] is not None:
@@ -1010,9 +1200,9 @@ class SupportSystemDashboard:
             details.append(f"""
             <div style="background-color: #fff3e0; color: #212529; padding: 1rem; border-radius: 0.5rem; border-left: 4px solid #ff9800; margin: 0.5rem 0;">
                 <strong style="color: #ff9800;">📊 Response Quality Metrics:</strong><br>
-                Overall Score: {eval_data.get('overall_score', 0):.3f} | 
-                Relevance: {eval_data.get('relevance_score', 0):.3f} | 
-                Accuracy: {eval_data.get('accuracy_score', 0):.3f} | 
+                Overall Score: {eval_data.get('overall_score', 0):.3f} |
+                Relevance: {eval_data.get('relevance_score', 0):.3f} |
+                Accuracy: {eval_data.get('accuracy_score', 0):.3f} |
                 Completeness: {eval_data.get('completeness_score', 0):.3f}
             </div>
             """)
@@ -1029,7 +1219,105 @@ class SupportSystemDashboard:
             """)
         
         return "".join(details)
-    
+
+    def _render_thinking_process(self, exchange: dict):
+        """Render the thinking process in a structured, user-friendly way."""
+        import html
+
+        # Helper function to safely escape HTML content
+        def safe_escape(text: str) -> str:
+            if not text:
+                return ""
+            return html.escape(str(text))
+
+        st.markdown("### 🧠 Agent Communication Flow")
+
+        # 1. Show Communication → Retrieval
+        com_to_ret = None
+        for msg in exchange.get('agent_conversation', []) or []:
+            if msg.get('sender') == 'communication_agent' and msg.get('recipient') == 'retrieval_agent':
+                com_to_ret = msg
+                break
+
+        if com_to_ret:
+            st.markdown("**1️⃣ Communication Agent → Retrieval Agent**")
+            with st.container():
+                st.info(f"📤 **Query sent:** {safe_escape(com_to_ret.get('content', ''))}")
+
+        # 2. Show Retrieval → Communication
+        ret_to_com = None
+        for msg in exchange.get('agent_conversation', []) or []:
+            if msg.get('sender') == 'retrieval_agent' and msg.get('recipient') == 'communication_agent' and msg.get('type') == 'response':
+                ret_to_com = msg
+                break
+
+        if ret_to_com:
+            st.markdown("**2️⃣ Retrieval Agent → Communication Agent**")
+            with st.container():
+                response_content = safe_escape(ret_to_com.get('content', ''))
+                if len(response_content) > 300:
+                    response_content = response_content[:300] + "..."
+                st.success(f"📥 **Response received:** {response_content}")
+
+        # 3. Show Documents Consulted
+        retrieved_docs = exchange.get('retrieved_docs')
+        if retrieved_docs:
+            st.markdown("**3️⃣ Documents Consulted**")
+
+            # Create tabs for better organization
+            if len(retrieved_docs) > 1:
+                doc_tabs = st.tabs([f"Doc {i+1}" for i in range(min(5, len(retrieved_docs)))])
+                for i, (tab, doc) in enumerate(zip(doc_tabs, retrieved_docs[:5])):
+                    with tab:
+                        try:
+                            src = doc['chunk']['source_file']
+                            snippet = doc['chunk']['content'][:300] + ('...' if len(doc['chunk']['content']) > 300 else '')
+                            score = doc.get('score', 0)
+
+                            st.markdown(f"**📄 Source:** `{src}`")
+                            st.markdown(f"**🎯 Similarity Score:** {score:.3f}")
+                            st.markdown(f"**📝 Content Preview:**")
+                            st.text_area("Document Content", value=snippet, height=100, disabled=True, key=f"doc_content_{i}", label_visibility="collapsed")
+                        except Exception:
+                            st.error("Error displaying document")
+            else:
+                # Single document - show directly
+                try:
+                    doc = retrieved_docs[0]
+                    src = doc['chunk']['source_file']
+                    snippet = doc['chunk']['content'][:400] + ('...' if len(doc['chunk']['content']) > 400 else '')
+                    score = doc.get('score', 0)
+
+                    col1, col2 = st.columns([2, 1])
+                    with col1:
+                        st.markdown(f"**📄 Source:** `{src}`")
+                    with col2:
+                        st.markdown(f"**🎯 Score:** {score:.3f}")
+
+                    st.markdown("**📝 Content Preview:**")
+                    st.text_area("Document Content", value=snippet, height=120, disabled=True, key="single_doc_content", label_visibility="collapsed")
+                except Exception:
+                    st.error("Error displaying document")
+
+        # 4. Show Evaluation Metrics
+        if 'evaluation' in exchange and exchange['evaluation'] is not None:
+            st.markdown("**4️⃣ Response Quality Assessment**")
+            eval_data = exchange['evaluation']
+
+            col1, col2, col3, col4 = st.columns(4)
+            with col1:
+                st.metric("Overall", f"{eval_data.get('overall_score', 0):.2f}")
+            with col2:
+                st.metric("Relevance", f"{eval_data.get('relevance_score', 0):.2f}")
+            with col3:
+                st.metric("Accuracy", f"{eval_data.get('accuracy_score', 0):.2f}")
+            with col4:
+                st.metric("Completeness", f"{eval_data.get('completeness_score', 0):.2f}")
+
+            if eval_data.get('feedback'):
+                st.markdown("**💬 Feedback:**")
+                st.info(safe_escape(eval_data.get('feedback', '')))
+
     def _start_agents(self):
         """Start all agents."""
         try:
@@ -1056,6 +1344,9 @@ class SupportSystemDashboard:
     def _start_training_episode(self):
         """Start a new training episode."""
         try:
+            if not st.session_state.rl_agent:
+                st.warning("RL training unavailable: communication agent has no encoder.")
+                return
             st.session_state.rl_agent.start_training_episode()
             st.success("🚀 Training episode started!")
         except Exception as e:
@@ -1064,6 +1355,9 @@ class SupportSystemDashboard:
     def _end_training_episode(self):
         """End the current training episode."""
         try:
+            if not st.session_state.rl_agent:
+                st.warning("RL training unavailable: communication agent has no encoder.")
+                return
             stats = st.session_state.rl_agent.end_training_episode()
             if stats:
                 st.success(f"⏹️ Training episode ended! Reward: {stats.episode_reward:.3f}")
@@ -1075,6 +1369,9 @@ class SupportSystemDashboard:
     def _run_batch_training(self, num_episodes: int):
         """Run batch training."""
         try:
+            if not st.session_state.rl_agent:
+                st.warning("RL training unavailable: communication agent has no encoder.")
+                return
             progress_bar = st.progress(0)
             status_text = st.empty()
             
@@ -1109,6 +1406,9 @@ class SupportSystemDashboard:
         try:
             model_path = "models/communication_agent_model.pt"
             os.makedirs(os.path.dirname(model_path), exist_ok=True)
+            if not st.session_state.rl_agent:
+                st.warning("RL training unavailable: communication agent has no encoder.")
+                return
             st.session_state.rl_agent.save_model(model_path)
             st.success(f"💾 Model saved to {model_path}")
         except Exception as e:

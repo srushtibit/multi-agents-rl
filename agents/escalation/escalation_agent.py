@@ -17,6 +17,7 @@ from datetime import datetime, timedelta
 import json
 
 from agents.base_agent import BaseAgent, Message, MessageType
+from langchain_ollama import OllamaLLM as Ollama
 from utils.language_utils import detect_language, translate_to_english
 from utils.config_loader import get_config
 
@@ -55,6 +56,12 @@ class EscalationAgent(BaseAgent):
         # Configuration
         self.severity_threshold = self.system_config.get('agents.escalation.severity_threshold', 0.9)
         self.email_delay = self.system_config.get('agents.escalation.email_delay', 300)  # 5 minutes
+        # Optional LLM for severity assessment refinement
+        self.llm_model = self.system_config.get("llm.models.escalation", "")
+        try:
+            self.ollama_client = Ollama(base_url=self.system_config.get("llm.ollama.base_url"), model=self.llm_model) if self.llm_model else None
+        except Exception:
+            self.ollama_client = None
         
         # Email configuration
         email_config = self.system_config.get('email', {})
@@ -264,7 +271,7 @@ class EscalationAgent(BaseAgent):
             severity_score += 0.05 * business_matches
             reasoning_parts.append(f"Business impact indicators: {business_matches}")
         
-        # Determine severity level
+        # Determine severity level (rule-based)
         if severity_score >= 0.9:
             severity_level = 'critical'
         elif severity_score >= 0.7:
@@ -273,6 +280,18 @@ class EscalationAgent(BaseAgent):
             severity_level = 'medium'
         else:
             severity_level = 'low'
+
+        # Optionally refine with Ollama if configured
+        try:
+            if self.ollama_client is not None:
+                llm_eval = await self._llm_refine_severity(original_content, severity_level, severity_score, reasoning_parts)
+                if llm_eval and 'severity_score' in llm_eval and 'severity_level' in llm_eval:
+                    # Combine rule-based and LLM scores conservatively (average)
+                    severity_score = float(max(0.0, min(1.0, (severity_score + float(llm_eval['severity_score'])) / 2.0)))
+                    severity_level = llm_eval['severity_level']
+                    reasoning_parts.append(f"LLM refinement: {llm_eval.get('reasoning', 'n/a')}")
+        except Exception as e:
+            logger.warning(f"LLM refinement failed: {e}")
         
         # Determine if escalation is required
         requires_escalation = severity_score >= self.severity_threshold
@@ -287,6 +306,37 @@ class EscalationAgent(BaseAgent):
             requires_escalation=requires_escalation,
             urgency_indicators=urgency_indicators
         )
+
+    async def _llm_refine_severity(self, original_text: str, base_level: str, base_score: float, reasons: List[str]) -> Optional[Dict[str, Any]]:
+        """Use Ollama to refine severity assessment and return a JSON dict."""
+        if self.ollama_client is None:
+            return None
+        prompt = f"""
+You are an incident triage assistant. Read the user's message and assess severity.
+
+User message:
+<<<
+{original_text}
+>>>
+
+Rule-based assessment:
+- level: {base_level}
+- score: {base_score:.2f}
+- indicators: {', '.join(reasons)}
+
+Instructions:
+- Return a compact JSON with keys: severity_level (one of low, medium, high, critical), severity_score (0.0-1.0), reasoning (short string).
+- Do not include any extra text outside JSON.
+
+JSON:
+"""
+        try:
+            raw = await asyncio.to_thread(self.ollama_client.invoke, prompt)
+            cleaned = raw.strip().replace('```json', '').replace('```', '').strip()
+            return json.loads(cleaned)
+        except Exception as e:
+            logger.debug(f"LLM refine parse error: {e}")
+            return None
     
     async def _handle_escalation(self, message: Message, severity_assessment: SeverityAssessment) -> Message:
         """

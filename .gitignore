@@ -397,3 +397,5 @@ deploy/staging/
 # To check what would be ignored:
 # git check-ignore *
 # =============================================================================
+
+*.docx
