@@ -142,6 +142,9 @@ kb/*.json
 kb/simple_knowledge_base.pkl
 kb/simple_knowledge_base.json
 kb/metadata.json
+demo_models/*.json
+checkpoints/*.json
+
 
 # Training Results and Models
 results/

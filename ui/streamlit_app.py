@@ -32,7 +32,9 @@ from agents.critic.critic_agent import CriticAgent
 from agents.escalation.escalation_agent import EscalationAgent
 from kb.unified_knowledge_base import get_knowledge_base
 from rl.environments.support_environment import SupportEnvironment, SupportTaskGenerator
-from rl.algorithms.reinforce import REINFORCEAgent
+from rl.algorithms.ollama_reinforce import OllamaREINFORCEAgent
+from rl.environments.ollama_support_environment import OllamaSupportEnvironment
+
 from utils.config_loader import get_config
 from utils.language_utils import detect_language
 
@@ -176,12 +178,17 @@ class SupportSystemDashboard:
             st.session_state.coordinator.register_agent(st.session_state.critic_agent)
             st.session_state.coordinator.register_agent(st.session_state.escalation_agent)
             
-            # Initialize RL components (optional; only if communication agent supports encoder)
+            # Initialize RL components - now using Ollama-compatible RL
             try:
-                _ = st.session_state.communication_agent.encoder  # probe optional attribute
-                st.session_state.rl_agent = REINFORCEAgent(st.session_state.communication_agent)
-            except Exception:
+                st.session_state.rl_agent = OllamaREINFORCEAgent(st.session_state.communication_agent)
+                st.session_state.ollama_environment = OllamaSupportEnvironment()
+                logger.info("Ollama RL system initialized successfully")
+            except Exception as e:
+                logger.error(f"Failed to initialize Ollama RL system: {e}")
                 st.session_state.rl_agent = None
+                st.session_state.ollama_environment = None
+
+            # Keep old environment for compatibility
             st.session_state.environment = SupportEnvironment()
             st.session_state.task_generator = SupportTaskGenerator()
             
@@ -561,97 +568,200 @@ class SupportSystemDashboard:
         
         except Exception as e:
             st.error(f"Error loading knowledge base stats: {e}")
+
+        # Ollama RL Performance
+        st.markdown("### 🧠 Ollama RL Performance")
+
+        try:
+            if st.session_state.rl_agent:
+                rl_stats = st.session_state.rl_agent.get_training_stats()
+
+                col1, col2, col3, col4 = st.columns(4)
+
+                with col1:
+                    st.metric(
+                        "RL Episodes",
+                        rl_stats.get('total_episodes', 0)
+                    )
+
+                with col2:
+                    st.metric(
+                        "Best Avg Reward",
+                        f"{rl_stats.get('best_average_reward', 0):.3f}"
+                    )
+
+                with col3:
+                    recent = rl_stats.get('recent_performance', {})
+                    st.metric(
+                        "Current Avg Reward",
+                        f"{recent.get('average_reward', 0):.3f}"
+                    )
+
+                with col4:
+                    st.metric(
+                        "Exploration Rate",
+                        f"{rl_stats.get('current_exploration_rate', 0):.3f}"
+                    )
+
+                # Strategy performance overview
+                strategy_performance = rl_stats.get('strategy_performance', {})
+                if strategy_performance:
+                    st.markdown("#### 🎯 Current Strategy Performance")
+
+                    strategy_data = []
+                    for strategy, perf in strategy_performance.items():
+                        strategy_data.append({
+                            'Strategy': strategy.replace('_', ' ').title(),
+                            'Uses': perf.get('total_uses', 0),
+                            'Avg Reward': perf.get('average_reward', 0),
+                            'Success Rate': f"{perf.get('success_rate', 0)*100:.1f}%"
+                        })
+
+                    if strategy_data:
+                        # Show as metrics in columns
+                        cols = st.columns(len(strategy_data))
+                        for col, row in zip(cols, strategy_data):
+                            with col:
+                                st.metric(
+                                    row['Strategy'],
+                                    f"{row['Avg Reward']:.3f}",
+                                    delta=f"{row['Uses']} uses"
+                                )
+            else:
+                st.info("Ollama RL system not initialized.")
+
+        except Exception as e:
+            st.error(f"Error loading RL performance stats: {e}")
     
     def _render_training_dashboard(self):
-        """Render the RL training dashboard."""
-        st.markdown("## 🎓 Reinforcement Learning Training")
-        
+        """Render the Ollama RL training dashboard."""
+        st.markdown("## 🎓 Ollama Reinforcement Learning Training")
+
         if not st.session_state.system_initialized:
             st.warning("⚠️ System not initialized. Please initialize the system first.")
             return
-        
+
+        if not st.session_state.rl_agent:
+            st.error("❌ Ollama RL system not available. Please check system initialization.")
+            return
+
+        # Training status
+        st.markdown("### 📊 Current Training Status")
+
+        training_stats = st.session_state.rl_agent.get_training_stats()
+
+        col1, col2, col3, col4 = st.columns(4)
+        with col1:
+            st.metric("Total Episodes", training_stats.get('total_episodes', 0))
+        with col2:
+            st.metric("Total Steps", training_stats.get('total_steps', 0))
+        with col3:
+            recent = training_stats.get('recent_performance', {})
+            st.metric("Avg Reward", f"{recent.get('average_reward', 0):.3f}")
+        with col4:
+            st.metric("Exploration Rate", f"{training_stats.get('current_exploration_rate', 0):.3f}")
+
         # Training controls
         st.markdown("### 🎮 Training Controls")
-        
+
         col1, col2, col3, col4 = st.columns(4)
-        
+
         with col1:
             if st.button("🚀 Start Training Episode"):
-                self._start_training_episode()
-        
+                self._start_ollama_training_episode()
+
         with col2:
             if st.button("⏹️ End Training Episode"):
-                self._end_training_episode()
-        
+                self._end_ollama_training_episode()
+
         with col3:
             num_episodes = st.number_input("Episodes to Run", min_value=1, max_value=100, value=10)
             if st.button("🔄 Run Batch Training"):
-                self._run_batch_training(num_episodes)
-        
+                self._run_ollama_batch_training(num_episodes)
+
         with col4:
             if st.button("💾 Save Model"):
-                self._save_training_model()
+                self._save_ollama_training_model()
         
-        # Training parameters
-        st.markdown("### ⚙️ Training Parameters")
+        # Strategy Performance
+        st.markdown("### 🎯 Strategy Performance")
+
+        strategy_performance = training_stats.get('strategy_performance', {})
+        if strategy_performance:
+            strategy_data = []
+            for strategy, perf in strategy_performance.items():
+                strategy_data.append({
+                    'Strategy': strategy.replace('_', ' ').title(),
+                    'Average Reward': perf.get('average_reward', 0),
+                    'Total Uses': perf.get('total_uses', 0),
+                    'Success Rate': f"{perf.get('success_rate', 0)*100:.1f}%"
+                })
+
+            df_strategies = pd.DataFrame(strategy_data)
+            st.dataframe(df_strategies, use_container_width=True)
+
+            # Strategy performance chart
+            if len(strategy_data) > 0:
+                fig = px.bar(df_strategies, x='Strategy', y='Average Reward',
+                           title="Strategy Performance Comparison",
+                           color='Average Reward',
+                           color_continuous_scale='viridis')
+                st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.info("No strategy performance data available yet. Start training to see strategy comparisons.")
         
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            learning_rate = st.slider("Learning Rate", 0.0001, 0.01, 0.001, format="%.4f")
-            gamma = st.slider("Discount Factor (γ)", 0.9, 0.999, 0.99, format="%.3f")
-        
-        with col2:
-            entropy_coef = st.slider("Entropy Coefficient", 0.001, 0.1, 0.01, format="%.3f")
-            max_episodes = st.slider("Max Episodes", 10, 1000, 100)
-        
-        # Training statistics
-        st.markdown("### 📊 Training Statistics")
-        
+        # Training Progress
+        st.markdown("### 📈 Training Progress")
+
         try:
-            if st.session_state.rl_agent is None:
-                st.info("RL training is unavailable because the communication agent does not expose an encoder.")
-                return
-            training_stats = st.session_state.rl_agent.get_training_stats()
-            
-            if training_stats:
-                col1, col2, col3, col4 = st.columns(4)
-                
-                with col1:
-                    st.metric("Total Episodes", training_stats.get('total_episodes', 0))
-                
-                with col2:
-                    st.metric("Total Steps", training_stats.get('total_steps', 0))
-                
-                with col3:
-                    recent = training_stats.get('recent_performance', {})
-                    st.metric("Avg Reward", f"{recent.get('average_reward', 0):.3f}")
-                
-                with col4:
-                    st.metric("Best Avg Reward", f"{training_stats.get('best_average_reward', 0):.3f}")
-                
-                # Training progress chart
-                progress_data = training_stats.get('training_progress', [])
-                if progress_data:
-                    df = pd.DataFrame(progress_data)
-                    
-                    fig = make_subplots(
-                        rows=2, cols=2,
-                        subplot_titles=('Average Reward', 'Episode Reward', 'Policy Loss', 'Episode Length')
-                    )
-                    
-                    fig.add_trace(go.Scatter(x=df['episode'], y=df['average_reward'], name='Avg Reward'), row=1, col=1)
-                    fig.add_trace(go.Scatter(x=df['episode'], y=df['episode_reward'], name='Episode Reward'), row=1, col=2)
-                    fig.add_trace(go.Scatter(x=df['episode'], y=df['policy_loss'], name='Policy Loss'), row=2, col=1)
-                    fig.add_trace(go.Scatter(x=df['episode'], y=df['episode_length'], name='Episode Length'), row=2, col=2)
-                    
-                    fig.update_layout(height=600, showlegend=False, title_text="Training Progress")
-                    st.plotly_chart(fig, use_container_width=True)
+            progress_data = training_stats.get('training_progress', [])
+            if progress_data and len(progress_data) > 0:
+                df = pd.DataFrame(progress_data)
+
+                # Create training progress charts
+                fig = make_subplots(
+                    rows=2, cols=2,
+                    subplot_titles=('Average Reward', 'Episode Reward', 'Exploration Rate', 'Episode Length')
+                )
+
+                fig.add_trace(go.Scatter(x=df['episode'], y=df['average_reward'],
+                                       name='Avg Reward', line=dict(color='blue')), row=1, col=1)
+                fig.add_trace(go.Scatter(x=df['episode'], y=df['episode_reward'],
+                                       name='Episode Reward', line=dict(color='green')), row=1, col=2)
+                fig.add_trace(go.Scatter(x=df['episode'], y=df['exploration_rate'],
+                                       name='Exploration Rate', line=dict(color='orange')), row=2, col=1)
+                fig.add_trace(go.Scatter(x=df['episode'], y=df['episode_length'],
+                                       name='Episode Length', line=dict(color='red')), row=2, col=2)
+
+                fig.update_layout(height=600, showlegend=False, title_text="Ollama RL Training Progress")
+                st.plotly_chart(fig, use_container_width=True)
+
+                # Recent performance summary
+                if len(progress_data) >= 5:
+                    recent_episodes = progress_data[-5:]
+                    avg_recent_reward = sum(ep['average_reward'] for ep in recent_episodes) / len(recent_episodes)
+                    avg_recent_length = sum(ep['episode_length'] for ep in recent_episodes) / len(recent_episodes)
+
+                    st.markdown("#### 📊 Recent Performance (Last 5 Episodes)")
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        st.metric("Average Reward", f"{avg_recent_reward:.3f}")
+                    with col2:
+                        st.metric("Average Episode Length", f"{avg_recent_length:.1f}")
             else:
-                st.info("📊 No training data available yet. Start training to see statistics.")
-        
+                st.info("📊 No training progress data available yet. Start training to see progress charts.")
+
         except Exception as e:
-            st.error(f"Error loading training stats: {e}")
+            st.error(f"Error loading training progress: {e}")
+
+        # Training Configuration
+        st.markdown("### ⚙️ Training Configuration")
+
+        col1, col2 = st.columns(2)
+        with col1:
+            st.info(f"**Learning Rate:** 0.1\n**Discount Factor (γ):** 0.95\n**Current Exploration Rate:** {training_stats.get('current_exploration_rate', 0.3):.3f}")
+        with col2:
+            st.info(f"**Min Exploration Rate:** 0.05\n**Exploration Decay:** 0.995\n**Best Average Reward:** {training_stats.get('best_average_reward', 0):.3f}")
     
     def _render_knowledge_base_interface(self):
         """Render the knowledge base management interface."""
@@ -1341,78 +1451,164 @@ class SupportSystemDashboard:
         # Simplified calculation
         return 2.5  # Mock value
     
-    def _start_training_episode(self):
-        """Start a new training episode."""
+    def _start_ollama_training_episode(self):
+        """Start a new Ollama RL training episode."""
         try:
             if not st.session_state.rl_agent:
-                st.warning("RL training unavailable: communication agent has no encoder.")
+                st.warning("❌ Ollama RL agent not available.")
                 return
             st.session_state.rl_agent.start_training_episode()
-            st.success("🚀 Training episode started!")
+            st.success("🚀 Ollama RL training episode started!")
         except Exception as e:
-            st.error(f"❌ Error starting training episode: {e}")
-    
-    def _end_training_episode(self):
-        """End the current training episode."""
+            st.error(f"❌ Error starting Ollama training episode: {e}")
+
+    def _end_ollama_training_episode(self):
+        """End the current Ollama RL training episode."""
         try:
             if not st.session_state.rl_agent:
-                st.warning("RL training unavailable: communication agent has no encoder.")
+                st.warning("❌ Ollama RL agent not available.")
                 return
             stats = st.session_state.rl_agent.end_training_episode()
             if stats:
-                st.success(f"⏹️ Training episode ended! Reward: {stats.episode_reward:.3f}")
+                st.success(f"⏹️ Ollama RL training episode ended!")
+                st.info(f"**Episode Reward:** {stats.episode_reward:.3f}\n**Episode Length:** {stats.episode_length}\n**Average Reward:** {stats.average_reward:.3f}")
             else:
                 st.warning("⚠️ No active training episode to end.")
         except Exception as e:
-            st.error(f"❌ Error ending training episode: {e}")
+            st.error(f"❌ Error ending Ollama training episode: {e}")
+
+    # Keep old methods for compatibility
+    def _start_training_episode(self):
+        """Legacy method - redirects to Ollama training."""
+        self._start_ollama_training_episode()
+
+    def _end_training_episode(self):
+        """Legacy method - redirects to Ollama training."""
+        self._end_ollama_training_episode()
     
-    def _run_batch_training(self, num_episodes: int):
-        """Run batch training."""
+    def _run_ollama_batch_training(self, num_episodes: int):
+        """Run Ollama RL batch training."""
         try:
-            if not st.session_state.rl_agent:
-                st.warning("RL training unavailable: communication agent has no encoder.")
+            if not st.session_state.rl_agent or not st.session_state.ollama_environment:
+                st.warning("❌ Ollama RL system not available.")
                 return
+
             progress_bar = st.progress(0)
             status_text = st.empty()
-            
+            results_container = st.empty()
+
+            episode_results = []
+
             for i in range(num_episodes):
                 # Start episode
                 st.session_state.rl_agent.start_training_episode()
-                
-                # Generate random task
-                task = st.session_state.task_generator.generate_task()
-                
-                # Simulate episode (simplified)
-                reward = np.random.uniform(0.3, 0.9)  # Mock reward
-                st.session_state.rl_agent.receive_reward(reward)
-                
+
+                # Reset environment
+                state = st.session_state.ollama_environment.reset()
+
+                total_reward = 0.0
+                steps = 0
+
+                # Run episode
+                while steps < 10:  # Limit steps per episode for UI responsiveness
+                    query = state.current_query
+
+                    # Process query with RL
+                    processed_query, strategy_used = st.session_state.rl_agent.process_query_with_rl(query)
+
+                    # Simulate response quality (in real scenario, this would come from actual processing)
+                    response_quality = np.random.uniform(0.4, 0.9)
+
+                    # Step environment
+                    action = {
+                        'strategy': strategy_used,
+                        'processed_query': processed_query,
+                        'response_quality': response_quality
+                    }
+
+                    next_state, reward, done, _ = st.session_state.ollama_environment.step(action)
+
+                    # Provide reward to RL agent
+                    st.session_state.rl_agent.receive_reward(reward, st.session_state.ollama_environment.get_state_representation())
+
+                    total_reward += reward
+                    steps += 1
+                    state = next_state
+
+                    if done:
+                        break
+
                 # End episode
                 stats = st.session_state.rl_agent.end_training_episode()
-                
+
+                episode_results.append({
+                    'episode': i + 1,
+                    'total_reward': total_reward,
+                    'steps': steps,
+                    'average_reward': stats.average_reward if stats else 0,
+                    'exploration_rate': stats.exploration_rate if stats else 0
+                })
+
                 # Update progress
                 progress = (i + 1) / num_episodes
                 progress_bar.progress(progress)
-                status_text.text(f"Episode {i+1}/{num_episodes} - Reward: {stats.episode_reward:.3f}")
-                
+                status_text.text(f"Episode {i+1}/{num_episodes} - Reward: {total_reward:.3f} - Steps: {steps}")
+
+                # Show recent results
+                if len(episode_results) >= 5:
+                    recent_df = pd.DataFrame(episode_results[-5:])
+                    with results_container.container():
+                        st.markdown("**Recent Episodes:**")
+                        st.dataframe(recent_df, use_container_width=True)
+
                 time.sleep(0.1)  # Small delay for visualization
-            
-            st.success(f"✅ Batch training completed! {num_episodes} episodes finished.")
-        
+
+            # Final results
+            results_df = pd.DataFrame(episode_results)
+            avg_reward = results_df['total_reward'].mean()
+            avg_steps = results_df['steps'].mean()
+
+            st.success(f"✅ Ollama RL batch training completed!")
+            st.info(f"**Episodes:** {num_episodes}\n**Average Reward:** {avg_reward:.3f}\n**Average Steps:** {avg_steps:.1f}")
+
+            # Show results chart
+            fig = px.line(results_df, x='episode', y='total_reward',
+                         title=f"Training Progress - {num_episodes} Episodes")
+            st.plotly_chart(fig, use_container_width=True)
+
         except Exception as e:
-            st.error(f"❌ Error in batch training: {e}")
+            st.error(f"❌ Error in Ollama batch training: {e}")
+
+    # Keep old method for compatibility
+    def _run_batch_training(self, num_episodes: int):
+        """Legacy method - redirects to Ollama batch training."""
+        self._run_ollama_batch_training(num_episodes)
     
-    def _save_training_model(self):
-        """Save the training model."""
+    def _save_ollama_training_model(self):
+        """Save the Ollama RL training model."""
         try:
-            model_path = "models/communication_agent_model.pt"
-            os.makedirs(os.path.dirname(model_path), exist_ok=True)
             if not st.session_state.rl_agent:
-                st.warning("RL training unavailable: communication agent has no encoder.")
+                st.warning("❌ Ollama RL agent not available.")
                 return
+
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            model_path = f"checkpoints/ollama_rl_model_{timestamp}.json"
+            os.makedirs(os.path.dirname(model_path), exist_ok=True)
+
             st.session_state.rl_agent.save_model(model_path)
-            st.success(f"💾 Model saved to {model_path}")
+            st.success(f"💾 Ollama RL model saved to {model_path}")
+
+            # Show model stats
+            stats = st.session_state.rl_agent.get_training_stats()
+            st.info(f"**Total Episodes:** {stats.get('total_episodes', 0)}\n**Best Average Reward:** {stats.get('best_average_reward', 0):.3f}")
+
         except Exception as e:
-            st.error(f"❌ Error saving model: {e}")
+            st.error(f"❌ Error saving Ollama RL model: {e}")
+
+    # Keep old method for compatibility
+    def _save_training_model(self):
+        """Legacy method - redirects to Ollama model saving."""
+        self._save_ollama_training_model()
     
     def _add_document_to_kb(self, uploaded_file):
         """Add uploaded document to knowledge base."""

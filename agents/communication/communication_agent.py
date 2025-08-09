@@ -2,6 +2,7 @@
 import logging
 from typing import Dict, Any, List, Optional
 import asyncio
+import numpy as np
 
 from agents.base_agent import BaseAgent, Message, MessageType
 from langchain_ollama import OllamaLLM as Ollama
@@ -16,6 +17,18 @@ class CommunicationAgent(BaseAgent):
         super().__init__(agent_id, config)
         self.llm_model = self.system_config.get("llm.models.communication", "llama3.1:8b")
         self.ollama_client = Ollama(base_url=self.system_config.get("llm.ollama.base_url"), model=self.llm_model)
+
+        # RL-related attributes for training
+        self.rl_enabled = False
+        self.current_episode_data = []
+        self.prompt_strategies = [
+            "direct_rewrite",
+            "context_enhanced",
+            "keyword_focused",
+            "intent_based"
+        ]
+        self.current_strategy = "direct_rewrite"
+        self.strategy_performance = {strategy: [] for strategy in self.prompt_strategies}
 
     def get_capabilities(self) -> List[str]:
         """Returns the capabilities of the communication agent."""
@@ -127,6 +140,7 @@ class CommunicationAgent(BaseAgent):
     async def _analyze_with_ollama(self, query: str) -> Optional[str]:
         """
         Uses the Ollama model to analyze, rephrase, and enhance the user's query.
+        Uses different strategies based on RL training.
 
         Args:
             query: The user query to analyze.
@@ -138,10 +152,37 @@ class CommunicationAgent(BaseAgent):
             logger.error("Ollama client is not available.")
             return None
 
-        prompt = f"""
+        # Select prompt based on current RL strategy
+        prompt = self._get_strategy_prompt(query, self.current_strategy)
+
+        try:
+            response = await asyncio.to_thread(self.ollama_client.invoke, prompt)
+            analyzed_query = response.strip()
+
+            # Record strategy usage for RL
+            if self.rl_enabled:
+                self.current_episode_data.append({
+                    'original_query': query,
+                    'strategy_used': self.current_strategy,
+                    'analyzed_query': analyzed_query,
+                    'timestamp': asyncio.get_event_loop().time()
+                })
+
+            logger.info(f"Ollama ({self.llm_model}) analyzed query using {self.current_strategy}: '{query}' -> '{analyzed_query}'")
+            return analyzed_query
+        except Exception as e:
+            logger.error(f"Ollama invocation failed: {e}")
+            return None
+
+    def _get_strategy_prompt(self, query: str, strategy: str) -> str:
+        """Get prompt based on the selected strategy."""
+        base_query = f'User message: "{query}"'
+
+        if strategy == "direct_rewrite":
+            return f"""
 Rewrite the user's message into a concise, precise KB search query.
 
-User message: "{query}"
+{base_query}
 
 Rules:
 - One line, 3-12 words.
@@ -149,14 +190,48 @@ Rules:
 - No filler; return ONLY the rewritten query.
 """
 
-        try:
-            response = await asyncio.to_thread(self.ollama_client.invoke, prompt)
-            analyzed_query = response.strip()
-            logger.info(f"Ollama ({self.llm_model}) analyzed query: '{query}' -> '{analyzed_query}'")
-            return analyzed_query
-        except Exception as e:
-            logger.error(f"Ollama invocation failed: {e}")
-            return None
+        elif strategy == "context_enhanced":
+            return f"""
+Analyze the user's message and create an enhanced search query with context.
+
+{base_query}
+
+Rules:
+- Add relevant technical context and synonyms.
+- Include related terms that might appear in documentation.
+- Keep it focused but comprehensive.
+- Return ONLY the enhanced query.
+"""
+
+        elif strategy == "keyword_focused":
+            return f"""
+Extract the most important keywords from the user's message for knowledge base search.
+
+{base_query}
+
+Rules:
+- Focus on technical terms, product names, and action words.
+- Remove filler words and casual language.
+- Prioritize searchable terms.
+- Return ONLY the keyword-focused query.
+"""
+
+        elif strategy == "intent_based":
+            return f"""
+Identify the user's intent and create a search query that captures their goal.
+
+{base_query}
+
+Rules:
+- Focus on what the user wants to achieve.
+- Include the problem type and desired outcome.
+- Make it specific to support documentation.
+- Return ONLY the intent-based query.
+"""
+
+        else:
+            # Fallback to direct rewrite
+            return self._get_strategy_prompt(query, "direct_rewrite")
 
     def _is_non_technical_query(self, query: str) -> bool:
         """
@@ -243,6 +318,66 @@ Rules:
 
         else:
             return "Hello! 👋 I'm your AI support assistant. I'm here to help you with any technical issues, account problems, or questions you might have. How can I assist you today?"
+
+    # RL Training Methods
+    def start_episode(self):
+        """Start a new RL training episode."""
+        self.rl_enabled = True
+        self.current_episode_data = []
+        logger.debug(f"Started RL episode for {self.agent_id}")
+
+    def end_episode(self):
+        """End the current RL training episode."""
+        self.rl_enabled = False
+        logger.debug(f"Ended RL episode for {self.agent_id}")
+
+    def update_from_reward(self, reward: float):
+        """Update agent behavior based on received reward."""
+        if self.rl_enabled:
+            # Record performance of current strategy
+            self.strategy_performance[self.current_strategy].append(reward)
+
+            # Adaptive strategy selection based on performance
+            if len(self.strategy_performance[self.current_strategy]) >= 5:
+                avg_performance = np.mean(self.strategy_performance[self.current_strategy][-5:])
+
+                # If current strategy is underperforming, try a different one
+                if avg_performance < 0.5:
+                    best_strategy = max(self.prompt_strategies,
+                                      key=lambda s: np.mean(self.strategy_performance[s][-5:]) if self.strategy_performance[s] else 0)
+                    if best_strategy != self.current_strategy:
+                        self.current_strategy = best_strategy
+                        logger.info(f"Switched to strategy: {self.current_strategy}")
+
+    def get_rl_state(self, query: str) -> Dict[str, Any]:
+        """Get current state representation for RL."""
+        return {
+            'query_length': len(query.split()),
+            'has_technical_keywords': any(kw in query.lower() for kw in ["password", "login", "access", "error", "problem"]),
+            'current_strategy': self.current_strategy,
+            'strategy_performance': {k: np.mean(v[-5:]) if v else 0.0 for k, v in self.strategy_performance.items()},
+            'query_complexity': self._assess_query_complexity(query)
+        }
+
+    def _assess_query_complexity(self, query: str) -> float:
+        """Assess the complexity of a query (0-1 scale)."""
+        factors = 0
+        query_lower = query.lower()
+
+        # Length factor
+        if len(query.split()) > 10:
+            factors += 0.3
+
+        # Technical terms
+        tech_terms = ["configuration", "authentication", "synchronization", "troubleshoot", "diagnostic"]
+        if any(term in query_lower for term in tech_terms):
+            factors += 0.4
+
+        # Multiple issues mentioned
+        if any(word in query_lower for word in ["and", "also", "additionally", "furthermore"]):
+            factors += 0.3
+
+        return min(1.0, factors)
 
     def _create_error_response(self, error_message: str, original_message: Message) -> Message:
         """Creates a standardized error message."""
