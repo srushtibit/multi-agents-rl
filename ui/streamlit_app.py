@@ -281,17 +281,64 @@ class SupportSystemDashboard:
             )
             
             st.divider()
-            
+
+            # Escalation alerts
+            st.markdown("### 🚨 Recent Escalations")
+
+            if hasattr(st.session_state, 'escalation_alerts') and st.session_state.escalation_alerts:
+                recent_alerts = st.session_state.escalation_alerts[-3:]  # Show last 3
+                for alert in reversed(recent_alerts):  # Most recent first
+                    severity = alert.get('severity_level', 'unknown')
+                    email_status = '✅' if alert.get('email_sent') else '❌'
+                    timestamp = alert.get('timestamp', '')
+
+                    # Parse timestamp for display
+                    try:
+                        from datetime import datetime
+                        dt = datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
+                        time_str = dt.strftime('%H:%M')
+                    except:
+                        time_str = 'N/A'
+
+                    severity_emoji = {
+                        'critical': '🔴',
+                        'high': '🟠',
+                        'medium': '🟡',
+                        'low': '🟢'
+                    }.get(severity, '⚪')
+
+                    st.markdown(f"""
+                    <div style="
+                        background: #f8f9fa;
+                        border-radius: 4px;
+                        padding: 6px;
+                        margin: 4px 0;
+                        font-size: 0.8em;
+                        border-left: 3px solid {'#ff4444' if severity == 'critical' else '#ff8800' if severity == 'high' else '#ffaa00' if severity == 'medium' else '#44aa44'};
+                    ">
+                        {severity_emoji} <strong>{severity.upper()}</strong><br>
+                        {email_status} {time_str}
+                    </div>
+                    """, unsafe_allow_html=True)
+
+                if st.button("🗑️ Clear Alerts"):
+                    st.session_state.escalation_alerts = []
+                    st.rerun()
+            else:
+                st.markdown("*No recent escalations*")
+
+            st.divider()
+
             # Quick actions
             st.markdown("### ⚡ Quick Actions")
-            
+
             if st.button("🧹 Clear Conversation"):
                 st.session_state.conversation_history = []
                 st.rerun()
-            
+
             if st.button("💾 Export Logs"):
                 self._export_logs()
-            
+
             if st.button("🔄 Reset System"):
                 self._reset_system()
     
@@ -352,7 +399,44 @@ class SupportSystemDashboard:
                                     🤖 {safe_response}
                                 </div>
                                 """, unsafe_allow_html=True)
-                            
+
+                            # Show escalation information if triggered
+                            if exchange.get('escalation_info'):
+                                escalation_info = exchange['escalation_info']
+                                severity_level = escalation_info.get('severity_assessment', {}).get('level', 'unknown')
+                                email_sent = escalation_info.get('email_sent', False)
+                                escalation_id = escalation_info.get('escalation_id', 'N/A')
+
+                                # Color coding for severity levels
+                                severity_colors = {
+                                    'critical': '#ff4444',
+                                    'high': '#ff8800',
+                                    'medium': '#ffaa00',
+                                    'low': '#44aa44'
+                                }
+                                color = severity_colors.get(severity_level, '#888888')
+
+                                st.markdown(f"""
+                                <div style="
+                                    background: linear-gradient(90deg, {color}22, {color}11);
+                                    border-left: 4px solid {color};
+                                    padding: 12px;
+                                    margin: 8px 0;
+                                    border-radius: 4px;
+                                    font-size: 0.9em;
+                                ">
+                                    <div style="font-weight: bold; color: {color};">
+                                        🚨 ESCALATION TRIGGERED - {severity_level.upper()} SEVERITY
+                                    </div>
+                                    <div style="margin-top: 4px; color: #666;">
+                                        📧 Email notification: {'✅ Sent successfully' if email_sent else '❌ Failed to send'}
+                                    </div>
+                                    <div style="margin-top: 4px; color: #666; font-size: 0.8em;">
+                                        ID: {escalation_id}
+                                    </div>
+                                </div>
+                                """, unsafe_allow_html=True)
+
                             # Thinking process button (if detailed info available)
                             if ('agent_conversation' in exchange and exchange['agent_conversation']) or \
                                ('evaluation' in exchange and exchange['evaluation'] is not None) or \
@@ -851,82 +935,597 @@ class SupportSystemDashboard:
     def _render_escalation_center(self):
         """Render the escalation monitoring center."""
         st.markdown("## ⚠️ Escalation Monitoring Center")
-        
+
         if not st.session_state.system_initialized:
             st.warning("⚠️ System not initialized. Please initialize the system first.")
             return
-        
-        # Escalation statistics
+
+        # Create tabs for different escalation functions
+        escalation_tab1, escalation_tab2, escalation_tab3, escalation_tab4 = st.tabs([
+            "📊 Dashboard", "🧪 Testing", "📧 Email Config", "📋 Management"
+        ])
+
+        with escalation_tab1:
+            self._render_escalation_dashboard()
+
+        with escalation_tab2:
+            self._render_escalation_testing()
+
+        with escalation_tab3:
+            self._render_email_configuration()
+
+        with escalation_tab4:
+            self._render_escalation_management()
+
+    def _render_escalation_dashboard(self):
+        """Render escalation statistics dashboard."""
         st.markdown("### 📊 Escalation Statistics")
-        
+
         try:
             escalation_stats = st.session_state.escalation_agent.get_escalation_stats()
-            
+
+            # Main metrics
             col1, col2, col3, col4 = st.columns(4)
-            
+
             with col1:
                 st.metric("Total Assessments", escalation_stats.get('total_assessments', 0))
-            
+
             with col2:
-                st.metric("Escalations Triggered", escalation_stats.get('escalations_triggered', 0))
-            
+                escalations = escalation_stats.get('escalations_triggered', 0)
+                st.metric("Escalations Triggered", escalations)
+
             with col3:
-                st.metric("Emails Sent", escalation_stats.get('emails_sent', 0))
-            
+                emails_sent = escalation_stats.get('emails_sent', 0)
+                st.metric("Emails Sent", emails_sent)
+
             with col4:
                 escalation_rate = escalation_stats.get('escalation_rate', 0)
                 st.metric("Escalation Rate", f"{escalation_rate:.2%}")
-            
-            # Severity distribution
+
+            # Additional metrics
+            col5, col6, col7, col8 = st.columns(4)
+
+            with col5:
+                email_success_rate = escalation_stats.get('email_success_rate', 0)
+                st.metric("Email Success Rate", f"{email_success_rate:.2%}")
+
+            with col6:
+                pending = escalation_stats.get('pending_escalations', 0)
+                st.metric("Pending Escalations", pending)
+
+            with col7:
+                false_positives = escalation_stats.get('false_positives', 0)
+                st.metric("False Positives", false_positives)
+
+            with col8:
+                if escalations > 0:
+                    avg_severity = sum(1 if e['severity'] == 'critical' else 0.8 if e['severity'] == 'high' else 0.5 if e['severity'] == 'medium' else 0.2
+                                     for e in escalation_stats.get('recent_escalations', [])) / len(escalation_stats.get('recent_escalations', [1]))
+                    st.metric("Avg Severity", f"{avg_severity:.2f}")
+                else:
+                    st.metric("Avg Severity", "0.00")
+
+            # Severity distribution chart
             severity_dist = escalation_stats.get('severity_distribution', {})
-            if severity_dist:
-                df = pd.DataFrame(list(severity_dist.items()), columns=['Severity', 'Count'])
-                
-                fig = px.pie(df, values='Count', names='Severity', 
-                           title="Severity Level Distribution")
-                st.plotly_chart(fig, use_container_width=True)
-        
-        except Exception as e:
-            st.error(f"Error loading escalation stats: {e}")
-        
-        # Recent escalations
-        st.markdown("### 🚨 Recent Escalations")
-        
-        try:
-            recent_escalations = st.session_state.escalation_agent.get_escalation_history(limit=20)
-            
+            if severity_dist and sum(severity_dist.values()) > 0:
+                col1, col2 = st.columns(2)
+
+                with col1:
+                    try:
+                        df_severity = pd.DataFrame(list(severity_dist.items()), columns=['Severity', 'Count'])
+                        fig_pie = px.pie(df_severity, values='Count', names='Severity',
+                                       title="Severity Level Distribution",
+                                       color_discrete_map={
+                                           'critical': '#ff4444',
+                                           'high': '#ff8800',
+                                           'medium': '#ffaa00',
+                                           'low': '#44aa44'
+                                       })
+                        st.plotly_chart(fig_pie, use_container_width=True)
+                    except Exception as e:
+                        st.error(f"Error creating severity chart: {e}")
+                        # Fallback: show text summary
+                        st.info("Severity Distribution:")
+                        for level, count in severity_dist.items():
+                            st.text(f"  {level.capitalize()}: {count}")
+
+                with col2:
+                    # Recent escalations timeline
+                    recent_escalations = escalation_stats.get('recent_escalations', [])
+                    if recent_escalations:
+                        try:
+                            df_timeline = pd.DataFrame(recent_escalations)
+                            df_timeline['timestamp'] = pd.to_datetime(df_timeline['timestamp'])
+                            df_timeline['severity_score'] = df_timeline['severity'].map({
+                                'critical': 4, 'high': 3, 'medium': 2, 'low': 1
+                            })
+
+                            fig_timeline = px.scatter(df_timeline, x='timestamp', y='severity_score',
+                                                    color='severity', size_max=10,
+                                                    title="Recent Escalations Timeline",
+                                                    color_discrete_map={
+                                                        'critical': '#ff4444',
+                                                        'high': '#ff8800',
+                                                        'medium': '#ffaa00',
+                                                        'low': '#44aa44'
+                                                    })
+                            fig_timeline.update_layout(yaxis=dict(tickvals=[1,2,3,4], ticktext=['Low','Medium','High','Critical']))
+                            st.plotly_chart(fig_timeline, use_container_width=True)
+                        except Exception as e:
+                            st.error(f"Error creating timeline chart: {e}")
+                            # Fallback: show simple text summary
+                            st.info(f"Recent escalations: {len(recent_escalations)} entries")
+                    else:
+                        st.info("No recent escalations to display")
+
+            # Recent escalations table
+            st.markdown("### 🚨 Recent Escalations")
+
+            recent_escalations = st.session_state.escalation_agent.get_escalation_history(limit=10)
+
             if recent_escalations:
                 df = pd.DataFrame(recent_escalations)
-                
+
                 # Format timestamp
                 df['timestamp'] = pd.to_datetime(df['timestamp']).dt.strftime('%Y-%m-%d %H:%M:%S')
-                
-                # Display table
-                st.dataframe(df[['escalation_id', 'severity_level', 'timestamp', 'email_sent', 'reasoning']], 
-                           use_container_width=True)
+
+                # Add status indicators
+                df['status'] = df.apply(lambda row:
+                    "✅ Sent" if row['email_sent'] else "❌ Failed", axis=1)
+
+                # Display table with better formatting
+                st.dataframe(
+                    df[['escalation_id', 'severity_level', 'timestamp', 'status', 'reasoning']],
+                    use_container_width=True,
+                    column_config={
+                        "escalation_id": "Escalation ID",
+                        "severity_level": "Severity",
+                        "timestamp": "Timestamp",
+                        "status": "Email Status",
+                        "reasoning": "Reason"
+                    }
+                )
             else:
                 st.info("📭 No recent escalations found.")
-        
+
+        except Exception as e:
+            st.error(f"Error loading escalation dashboard: {e}")
+
+    def _render_escalation_testing(self):
+        """Render escalation testing interface."""
+        st.markdown("### 🧪 Escalation Testing")
+
+        # Test message input
+        st.markdown("#### Test Severity Assessment")
+
+        col1, col2 = st.columns([2, 1])
+
+        with col1:
+            test_message = st.text_area(
+                "Enter a test message to assess severity:",
+                placeholder="e.g., URGENT: System is down and all customers are affected!",
+                height=100
+            )
+
+        with col2:
+            st.markdown("**Severity Keywords:**")
+            st.markdown("🔴 **Critical:** urgent, critical, emergency, lawsuit, security breach")
+            st.markdown("🟠 **High:** important, asap, priority, deadline")
+            st.markdown("🟡 **Medium:** problem, issue, error, broken")
+
+        if st.button("🔍 Assess Severity") and test_message:
+            try:
+                # Create test message
+                from agents.base_agent import Message, MessageType
+                import uuid
+
+                test_msg = Message(
+                    type=MessageType.QUERY,
+                    content=test_message,
+                    sender="test_user",
+                    recipient="escalation_agent",
+                    id=str(uuid.uuid4())
+                )
+
+                # Assess severity
+                severity_assessment = asyncio.run(
+                    st.session_state.escalation_agent._assess_severity(test_msg)
+                )
+
+                # Display results
+                col1, col2, col3 = st.columns(3)
+
+                with col1:
+                    severity_color = {
+                        'critical': '🔴', 'high': '🟠', 'medium': '🟡', 'low': '🟢'
+                    }
+                    st.metric(
+                        "Severity Level",
+                        f"{severity_color.get(severity_assessment.severity_level, '⚪')} {severity_assessment.severity_level.upper()}"
+                    )
+
+                with col2:
+                    st.metric("Severity Score", f"{severity_assessment.severity_score:.3f}")
+
+                with col3:
+                    st.metric("Escalation Required", "YES" if severity_assessment.requires_escalation else "NO")
+
+                # Detailed analysis
+                st.markdown("#### 📋 Analysis Details")
+
+                col1, col2 = st.columns(2)
+
+                with col1:
+                    st.markdown("**Trigger Keywords:**")
+                    if severity_assessment.trigger_keywords:
+                        for keyword in severity_assessment.trigger_keywords:
+                            st.markdown(f"• `{keyword}`")
+                    else:
+                        st.markdown("• None detected")
+
+                with col2:
+                    st.markdown("**Urgency Indicators:**")
+                    if severity_assessment.urgency_indicators:
+                        for indicator in severity_assessment.urgency_indicators:
+                            st.markdown(f"• {indicator}")
+                    else:
+                        st.markdown("• None detected")
+
+                st.markdown("**Reasoning:**")
+                st.info(severity_assessment.reasoning)
+
+                # Test escalation email
+                if severity_assessment.requires_escalation:
+                    st.markdown("#### 📧 Escalation Email Preview")
+
+                    if st.button("📧 Preview Escalation Email"):
+                        subject, body = st.session_state.escalation_agent._prepare_escalation_email(
+                            test_msg, severity_assessment, f"TEST_{datetime.now().strftime('%H%M%S')}"
+                        )
+
+                        st.markdown("**Subject:**")
+                        st.code(subject)
+
+                        st.markdown("**Body:**")
+                        st.text_area("Email Body", body, height=300, disabled=True)
+
+            except Exception as e:
+                st.error(f"Error testing escalation: {e}")
+
+        # Predefined test scenarios
+        st.markdown("#### 🎭 Test Scenarios")
+
+        scenarios = {
+            "🔴 Critical - System Outage": "EMERGENCY: Our entire production system is down! All customers are affected and we're losing revenue. This needs immediate attention!",
+            "🟠 High - Security Breach": "URGENT: We detected unauthorized access to our database. Potential data breach in progress. Please escalate immediately.",
+            "🟡 Medium - Performance Issue": "Important: The application is running very slowly today. Multiple users are complaining about response times.",
+            "🟢 Low - General Question": "Hi, I have a question about how to reset my password. Can someone help me when you have time?"
+        }
+
+        selected_scenario = st.selectbox("Select a test scenario:", list(scenarios.keys()))
+
+        if st.button("🚀 Run Scenario Test"):
+            st.text_area("Test Message:", scenarios[selected_scenario], height=80, disabled=True)
+            # Auto-populate the test message
+            st.session_state.test_message = scenarios[selected_scenario]
+
+    def _render_email_configuration(self):
+        """Render email configuration interface."""
+        st.markdown("### 📧 Email Configuration")
+
+        # Current configuration display
+        st.markdown("#### 📋 Current Configuration")
+
+        try:
+            config = st.session_state.escalation_agent.system_config.get('email', {})
+
+            col1, col2 = st.columns(2)
+
+            with col1:
+                st.info(f"""
+                **SMTP Server:** {config.get('smtp_server', 'Not configured')}
+                **SMTP Port:** {config.get('smtp_port', 'Not configured')}
+                **Use TLS:** {config.get('use_tls', 'Not configured')}
+                **Sender Email:** {config.get('sender_email', 'Not configured')}
+                """)
+
+            with col2:
+                recipients = config.get('escalation_recipients', [])
+                st.info(f"""
+                **Recipients:** {len(recipients)} configured
+                {chr(10).join(f"• {recipient}" for recipient in recipients[:5])}
+                {'• ...' if len(recipients) > 5 else ''}
+                """)
+
+        except Exception as e:
+            st.error(f"Error loading email configuration: {e}")
+
+        # Test email configuration
+        st.markdown("#### 🧪 Test Email Configuration")
+
+        col1, col2 = st.columns(2)
+
+        with col1:
+            if st.button("🔍 Test Connection"):
+                try:
+                    with st.spinner("Testing email configuration..."):
+                        test_result = st.session_state.escalation_agent.test_email_configuration()
+
+                    if test_result['status'] == 'success':
+                        st.success("✅ Email configuration is working correctly!")
+
+                        details = test_result.get('details', {})
+                        st.json({
+                            "SMTP Server": details.get('smtp_server'),
+                            "SMTP Port": details.get('smtp_port'),
+                            "Use TLS": details.get('use_tls'),
+                            "Sender Email": details.get('sender_email'),
+                            "Recipients Count": details.get('recipients_count')
+                        })
+                    else:
+                        st.error("❌ Email configuration has issues:")
+                        for error in test_result.get('errors', []):
+                            st.error(f"• {error}")
+
+                except Exception as e:
+                    st.error(f"Error testing email configuration: {e}")
+
+        with col2:
+            if st.button("📧 Send Test Email"):
+                try:
+                    # Create a test escalation record
+                    from agents.escalation.escalation_agent import EscalationRecord, SeverityAssessment
+                    from datetime import datetime
+
+                    test_assessment = SeverityAssessment(
+                        severity_level='medium',
+                        severity_score=0.6,
+                        trigger_keywords=['test'],
+                        reasoning='This is a test escalation email',
+                        requires_escalation=True,
+                        urgency_indicators=['test_scenario']
+                    )
+
+                    test_record = EscalationRecord(
+                        escalation_id=f"TEST_{datetime.now().strftime('%Y%m%d_%H%M%S')}",
+                        original_message_id="test_message",
+                        severity_assessment=test_assessment,
+                        escalation_timestamp=datetime.now().isoformat(),
+                        email_sent=False,
+                        email_recipients=st.session_state.escalation_agent.recipients.copy(),
+                        email_subject="🧪 TEST ESCALATION - Email Configuration Test",
+                        email_body="This is a test escalation email to verify the email configuration is working correctly.",
+                        follow_up_required=False,
+                        resolution_deadline=None
+                    )
+
+                    with st.spinner("Sending test email..."):
+                        email_sent = asyncio.run(
+                            st.session_state.escalation_agent._send_escalation_email(test_record)
+                        )
+
+                    if email_sent:
+                        st.success("✅ Test email sent successfully!")
+                    else:
+                        st.error("❌ Failed to send test email. Check configuration and logs.")
+
+                except Exception as e:
+                    st.error(f"Error sending test email: {e}")
+
+        # Configuration update form
+        st.markdown("#### ⚙️ Update Configuration")
+
+        with st.expander("📝 Update Email Settings", expanded=False):
+            st.warning("⚠️ Configuration changes require system restart to take effect.")
+
+            # Email settings form
+            with st.form("email_config_form"):
+                col1, col2 = st.columns(2)
+
+                with col1:
+                    new_smtp_server = st.text_input("SMTP Server", value="smtp.gmail.com")
+                    new_smtp_port = st.number_input("SMTP Port", value=587, min_value=1, max_value=65535)
+                    new_use_tls = st.checkbox("Use TLS", value=True)
+
+                with col2:
+                    new_sender_email = st.text_input("Sender Email", placeholder="support@company.com")
+                    new_sender_password = st.text_input("Sender Password", type="password",
+                                                      help="Use app-specific password for Gmail")
+
+                new_recipients = st.text_area(
+                    "Escalation Recipients (one per line)",
+                    placeholder="manager@company.com\nemergency@company.com",
+                    height=100
+                )
+
+                if st.form_submit_button("💾 Save Configuration"):
+                    try:
+                        # Parse recipients
+                        recipients_list = [r.strip() for r in new_recipients.split('\n') if r.strip()]
+
+                        # Update configuration (this would need to be implemented)
+                        st.info("Configuration update functionality would be implemented here.")
+                        st.json({
+                            "smtp_server": new_smtp_server,
+                            "smtp_port": new_smtp_port,
+                            "use_tls": new_use_tls,
+                            "sender_email": new_sender_email,
+                            "sender_password": "***" if new_sender_password else "",
+                            "recipients": recipients_list
+                        })
+
+                    except Exception as e:
+                        st.error(f"Error updating configuration: {e}")
+
+    def _render_escalation_management(self):
+        """Render escalation management interface."""
+        st.markdown("### 📋 Escalation Management")
+
+        # Pending escalations
+        st.markdown("#### ⏳ Pending Escalations")
+
+        try:
+            escalation_stats = st.session_state.escalation_agent.get_escalation_stats()
+            pending_count = escalation_stats.get('pending_escalations', 0)
+
+            if pending_count > 0:
+                st.warning(f"⚠️ You have {pending_count} pending escalations requiring attention!")
+
+                # Get pending escalations (this would need to be implemented in the agent)
+                pending_escalations = getattr(st.session_state.escalation_agent, 'pending_escalations', {})
+
+                if pending_escalations:
+                    for escalation_id, record in pending_escalations.items():
+                        with st.expander(f"🚨 {escalation_id} - {record.severity_assessment.severity_level.upper()}", expanded=False):
+                            col1, col2 = st.columns([2, 1])
+
+                            with col1:
+                                st.markdown(f"**Timestamp:** {record.escalation_timestamp}")
+                                st.markdown(f"**Severity Score:** {record.severity_assessment.severity_score:.3f}")
+                                st.markdown(f"**Email Sent:** {'✅ Yes' if record.email_sent else '❌ No'}")
+                                st.markdown(f"**Reasoning:** {record.severity_assessment.reasoning}")
+
+                                if record.resolution_deadline:
+                                    deadline = datetime.fromisoformat(record.resolution_deadline)
+                                    time_left = deadline - datetime.now()
+                                    if time_left.total_seconds() > 0:
+                                        st.markdown(f"**Deadline:** {deadline.strftime('%Y-%m-%d %H:%M:%S')} ({time_left})")
+                                    else:
+                                        st.error(f"**OVERDUE:** Deadline was {deadline.strftime('%Y-%m-%d %H:%M:%S')}")
+
+                            with col2:
+                                if st.button(f"✅ Mark Resolved", key=f"resolve_{escalation_id}"):
+                                    if st.session_state.escalation_agent.mark_escalation_resolved(escalation_id):
+                                        st.success(f"Escalation {escalation_id} marked as resolved!")
+                                        st.rerun()
+                                    else:
+                                        st.error("Failed to mark escalation as resolved.")
+
+                                if st.button(f"📧 Resend Email", key=f"resend_{escalation_id}"):
+                                    try:
+                                        email_sent = asyncio.run(
+                                            st.session_state.escalation_agent._send_escalation_email(record)
+                                        )
+                                        if email_sent:
+                                            st.success("Email resent successfully!")
+                                        else:
+                                            st.error("Failed to resend email.")
+                                    except Exception as e:
+                                        st.error(f"Error resending email: {e}")
+            else:
+                st.success("✅ No pending escalations. All clear!")
+
+        except Exception as e:
+            st.error(f"Error loading pending escalations: {e}")
+
+        # Escalation history management
+        st.markdown("#### 📚 Escalation History")
+
+        col1, col2, col3 = st.columns(3)
+
+        with col1:
+            history_limit = st.selectbox("Show last:", [10, 20, 50, 100], index=1)
+
+        with col2:
+            severity_filter = st.selectbox("Filter by severity:",
+                                         ["All", "Critical", "High", "Medium", "Low"])
+
+        with col3:
+            if st.button("🔄 Refresh History"):
+                st.rerun()
+
+        try:
+            escalation_history = st.session_state.escalation_agent.get_escalation_history(limit=history_limit)
+
+            # Apply severity filter
+            if severity_filter != "All":
+                escalation_history = [e for e in escalation_history
+                                    if e['severity_level'].lower() == severity_filter.lower()]
+
+            if escalation_history:
+                df = pd.DataFrame(escalation_history)
+
+                # Format timestamp
+                df['timestamp'] = pd.to_datetime(df['timestamp']).dt.strftime('%Y-%m-%d %H:%M:%S')
+
+                # Add action buttons column (for future use)
+                # df['actions'] = df['escalation_id'].apply(lambda x: f"📧 Resend | 📋 Details")
+
+                # Display with better formatting
+                st.dataframe(
+                    df[['escalation_id', 'severity_level', 'severity_score', 'timestamp', 'email_sent', 'reasoning']],
+                    use_container_width=True,
+                    column_config={
+                        "escalation_id": "ID",
+                        "severity_level": "Severity",
+                        "severity_score": st.column_config.NumberColumn("Score", format="%.3f"),
+                        "timestamp": "Timestamp",
+                        "email_sent": st.column_config.CheckboxColumn("Email Sent"),
+                        "reasoning": "Reason"
+                    }
+                )
+
+                # Export functionality
+                if st.button("📥 Export History to CSV"):
+                    csv = df.to_csv(index=False)
+                    st.download_button(
+                        label="💾 Download CSV",
+                        data=csv,
+                        file_name=f"escalation_history_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                        mime="text/csv"
+                    )
+            else:
+                st.info("📭 No escalation history found with the current filters.")
+
         except Exception as e:
             st.error(f"Error loading escalation history: {e}")
-        
-        # Email configuration test
-        st.markdown("### 📧 Email Configuration")
-        
-        if st.button("🧪 Test Email Configuration"):
-            try:
-                test_result = st.session_state.escalation_agent.test_email_configuration()
-                
-                if test_result['status'] == 'success':
-                    st.success("✅ Email configuration is working correctly!")
-                    st.json(test_result['details'])
+
+        # System controls
+        st.markdown("#### ⚙️ System Controls")
+
+        col1, col2, col3 = st.columns(3)
+
+        with col1:
+            if st.button("🔄 Reset Statistics"):
+                if st.session_state.get('confirm_reset_stats', False):
+                    # Reset statistics (this would need to be implemented)
+                    st.session_state.escalation_agent.escalation_stats = {
+                        'total_assessments': 0,
+                        'escalations_triggered': 0,
+                        'emails_sent': 0,
+                        'false_positives': 0,
+                        'severity_distribution': {'low': 0, 'medium': 0, 'high': 0, 'critical': 0}
+                    }
+                    st.success("Statistics reset successfully!")
+                    st.session_state.confirm_reset_stats = False
+                    st.rerun()
                 else:
-                    st.error("❌ Email configuration has issues:")
-                    for error in test_result['errors']:
-                        st.error(f"• {error}")
-            
-            except Exception as e:
-                st.error(f"Error testing email configuration: {e}")
+                    st.session_state.confirm_reset_stats = True
+                    st.warning("Click again to confirm statistics reset.")
+
+        with col2:
+            if st.button("📊 Export Statistics"):
+                stats = st.session_state.escalation_agent.get_escalation_stats()
+                stats_json = json.dumps(stats, indent=2, default=str)
+                st.download_button(
+                    label="💾 Download JSON",
+                    data=stats_json,
+                    file_name=f"escalation_stats_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
+                    mime="application/json"
+                )
+
+        with col3:
+            if st.button("🧹 Clear History"):
+                if st.session_state.get('confirm_clear_history', False):
+                    # Clear history (this would need to be implemented)
+                    st.session_state.escalation_agent.escalation_history = []
+                    st.session_state.escalation_agent.pending_escalations = {}
+                    st.success("History cleared successfully!")
+                    st.session_state.confirm_clear_history = False
+                    st.rerun()
+                else:
+                    st.session_state.confirm_clear_history = True
+                    st.warning("Click again to confirm history clearing.")
     
     def _render_configuration_interface(self):
         """Render the system configuration interface."""
@@ -995,6 +1594,30 @@ class SupportSystemDashboard:
                 recipient="communication_agent",
                 language=language_result.language
             )
+
+            # Check for escalation FIRST before processing
+            escalation_response = None
+            try:
+                escalation_response = await st.session_state.escalation_agent.process_message(user_message)
+                if escalation_response and escalation_response.metadata.get('escalation_triggered'):
+                    # Add escalation alert to session state for UI display
+                    escalation_info = {
+                        'timestamp': datetime.now().isoformat(),
+                        'escalation_id': escalation_response.metadata.get('escalation_id'),
+                        'severity_level': escalation_response.metadata.get('severity_assessment', {}).get('level'),
+                        'email_sent': escalation_response.metadata.get('email_sent', False),
+                        'reasoning': escalation_response.metadata.get('severity_assessment', {}).get('reasoning')
+                    }
+                    if 'escalation_alerts' not in st.session_state:
+                        st.session_state.escalation_alerts = []
+                    st.session_state.escalation_alerts.append(escalation_info)
+
+                    # Show escalation alert in UI
+                    st.warning(f"🚨 **ESCALATION TRIGGERED** - {escalation_info['severity_level'].upper()} severity detected!")
+                    st.info(f"📧 Email notification: {'✅ Sent' if escalation_info['email_sent'] else '❌ Failed'}")
+
+            except Exception as e:
+                logger.error(f"Error in escalation check: {e}")
             
             # Ensure agents are running before processing cycles
             if not getattr(st.session_state.coordinator, "is_running", False):
@@ -1100,6 +1723,7 @@ class SupportSystemDashboard:
                     'symbolic_encoding': symbolic_encoding,
                     'evaluation': evaluation_result,
                     'retrieved_docs': st.session_state.get('last_retrieved_docs'),
+                    'escalation_info': escalation_response.metadata if escalation_response and escalation_response.metadata.get('escalation_triggered') else None,
                     'processing': False  # Remove processing flag
                 })
             else:
@@ -1114,6 +1738,7 @@ class SupportSystemDashboard:
                     'symbolic_encoding': symbolic_encoding,
                     'evaluation': evaluation_result,
                     'retrieved_docs': st.session_state.get('last_retrieved_docs'),
+                    'escalation_info': escalation_response.metadata if escalation_response and escalation_response.metadata.get('escalation_triggered') else None,
                     'processing': False
                 }
                 st.session_state.conversation_history.append(conversation_entry)

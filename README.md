@@ -23,6 +23,202 @@ This project implements a **revolutionary multi-agent AI support system** that u
 | 🛠️ **Local & Privacy-First** | Powered by Ollama LLMs and local tools (FAISS) for complete data privacy |
 | 📈 **Production Ready** | Full Streamlit integration with training dashboard and performance monitoring |
 
+## 📧 Email Escalation System
+
+### Overview
+
+The email escalation system automatically detects high-severity issues and sends professional email alerts to designated recipients. It uses advanced severity assessment algorithms and integrates seamlessly with the multi-agent architecture.
+
+### Key Features
+
+- **🎯 Smart Severity Detection**: Multi-dimensional analysis using keywords, urgency patterns, and business impact assessment
+- **📧 Automated Email Notifications**: Professional escalation emails with detailed analysis and recommendations
+- **🔒 Secure Configuration**: Passwords stored in environment variables, never in code
+- **📊 Real-time Monitoring**: Live dashboard with escalation statistics and trends
+- **🧪 Testing Interface**: Interactive testing with predefined scenarios
+- **📋 Management Tools**: Track, resolve, and export escalation history
+
+### Email Provider Setup
+
+#### Gmail Setup
+```bash
+# 1. Enable 2-Factor Authentication on your Google account
+# 2. Go to Google Account settings > Security > App passwords
+# 3. Generate an app-specific password for 'Mail'
+# 4. Use this app password in your .env file
+
+# .env configuration:
+EMAIL_SENDER_PASSWORD=your_16_character_app_password
+```
+
+#### Outlook Setup
+```bash
+# 1. Go to Outlook.com > Settings > Mail > Sync email
+# 2. Enable IMAP access
+# 3. For 2FA accounts, create an app password
+# 4. Use app password in .env file
+
+# .env configuration:
+EMAIL_SENDER_PASSWORD=your_outlook_app_password
+```
+
+#### Corporate Email
+```bash
+# Contact your IT administrator for:
+# - SMTP server address and port
+# - Authentication requirements
+# - VPN or network access requirements
+
+# Common corporate settings:
+# SMTP Port: 587 or 25
+# TLS: Usually enabled
+# Authentication: May differ from email password
+```
+
+### Configuration
+
+#### Environment Variables (.env)
+```bash
+# Required - Email password (use app password for Gmail/Outlook)
+EMAIL_SENDER_PASSWORD=your_app_password_here
+
+# Optional - Override config file settings
+EMAIL_SMTP_SERVER=smtp.gmail.com
+EMAIL_SMTP_PORT=587
+EMAIL_SENDER_EMAIL=your_email@gmail.com
+EMAIL_USE_TLS=true
+```
+
+#### System Configuration (config/system_config.yaml)
+```yaml
+email:
+  smtp_server: smtp.gmail.com
+  smtp_port: 587
+  use_tls: true
+  sender_email: your_email@gmail.com
+  sender_password: ${EMAIL_SENDER_PASSWORD}  # Loaded from .env
+  escalation_recipients:
+    - manager@company.com
+    - emergency@company.com
+  templates_path: config/email_templates
+```
+
+### Severity Levels
+
+| Level | Score Range | Description | Action |
+|-------|-------------|-------------|---------|
+| 🟢 **Low** | 0.0-0.4 | Standard support requests | Normal processing |
+| 🟡 **Medium** | 0.4-0.7 | Priority issues requiring attention | Flagged for review |
+| 🟠 **High** | 0.7-0.9 | Urgent problems needing fast resolution | Email notification |
+| 🔴 **Critical** | 0.9+ | Emergency situations | Immediate escalation |
+
+### Trigger Keywords
+
+#### Critical Keywords
+- `emergency`, `urgent`, `critical`
+- `security breach`, `data breach`
+- `lawsuit`, `legal action`
+- `system down`, `outage`
+
+#### High Priority Keywords
+- `important`, `asap`, `priority`
+- `deadline`, `time-sensitive`
+- `customer complaint`, `escalate`
+
+#### Business Impact Keywords
+- `revenue loss`, `financial impact`
+- `customer affected`, `production issue`
+- `compliance`, `audit`
+
+### Testing the Escalation System
+
+#### Interactive Demo
+```bash
+# Run the escalation system demo
+python demo_escalation_system.py
+
+# Choose option 1 for full system demo
+# Choose option 2 for interactive email setup
+```
+
+#### Streamlit Interface
+```bash
+# Launch the Streamlit app
+streamlit run ui/streamlit_app.py
+
+# Navigate to "Escalation Center" tab
+# Use the testing interface to simulate different scenarios
+```
+
+#### Test Scenarios
+```python
+# Critical scenario
+"EMERGENCY: Production database is down! All customers affected."
+
+# High priority scenario
+"URGENT: Security breach detected. Unauthorized access to user data."
+
+# Medium priority scenario
+"Important: Application performance issues affecting multiple users."
+
+# Low priority scenario
+"Hi, I have a question about resetting my password."
+```
+
+### Monitoring and Management
+
+#### Real-time Dashboard
+- **📊 Live Metrics**: Escalation rates, email success rates, severity distribution
+- **📈 Visual Analytics**: Charts showing escalation trends and patterns
+- **⏰ Recent Activity**: Latest escalations with status and details
+
+#### Management Tools
+- **✅ Resolution Tracking**: Mark escalations as resolved
+- **📧 Email Resending**: Retry failed email notifications
+- **📥 Export Capabilities**: Download escalation history as CSV/JSON
+- **🔄 System Controls**: Reset statistics, clear history
+
+#### Performance Metrics
+- **Escalation Rate**: Percentage of queries triggering escalation
+- **Email Success Rate**: Percentage of emails sent successfully
+- **False Positive Rate**: Incorrectly escalated queries
+- **Average Response Time**: Time from detection to email sent
+
+### Troubleshooting
+
+#### Common Issues
+
+**Email Not Sending**
+```bash
+# Check configuration
+python -c "from utils.email_config_helper import test_current_email_config; print(test_current_email_config())"
+
+# Test email connection
+python demo_escalation_system.py  # Choose option 2
+```
+
+**Authentication Errors**
+- Verify app password (not regular password) for Gmail/Outlook
+- Check 2FA settings and app-specific passwords
+- Ensure SMTP server and port are correct
+
+**Environment Variables Not Loading**
+```bash
+# Verify .env file exists and has correct format
+cat .env
+
+# Test environment loading
+python -c "from dotenv import load_dotenv; import os; load_dotenv(); print(os.getenv('EMAIL_SENDER_PASSWORD', 'Not found'))"
+```
+
+### Security Best Practices
+
+- ✅ **Use App Passwords**: Never use regular email passwords
+- ✅ **Environment Variables**: Store sensitive data in .env file
+- ✅ **Version Control**: .env file is excluded from git
+- ✅ **Access Control**: Limit escalation recipients to authorized personnel
+- ✅ **Regular Testing**: Verify email configuration periodically
+
 ## 🏗️ Architecture
 
 ```mermaid
@@ -96,7 +292,20 @@ cp config/system_config.yaml config/my_config.yaml
 # - Knowledge base paths
 ```
 
-### 3. Initialize Knowledge Base
+### 3. Configure Environment Variables
+
+```bash
+# Copy the example environment file
+cp .env.example .env
+
+# Edit .env with your email configuration
+# Required for escalation system:
+EMAIL_SENDER_PASSWORD=your_app_password_here
+```
+
+**Important**: The `.env` file contains sensitive information and is excluded from version control. Never commit passwords to git.
+
+### 4. Initialize Knowledge Base
 
 ```bash
 # Build knowledge base from your documents (processes all files in dataset/)
@@ -119,7 +328,7 @@ kb.save_index()
 "
 ```
 
-### 4. Launch the System
+### 5. Launch the System
 
 #### Option A: Interactive Dashboard (Recommended)
 ```bash
@@ -187,8 +396,14 @@ stats = rl_agent.end_training_episode()
   - **Language Quality** (10%): Professional communication standards
 
 #### **Escalation Agent** (`agents/escalation/`)
-- **Purpose**: Detects high-severity issues and triggers notifications
-- **Technology**: Pattern-based severity analysis + SMTP integration
+- **Purpose**: Detects high-severity issues and sends automated email alerts
+- **Technology**: Advanced severity assessment + SMTP integration + real-time monitoring
+- **Key Features**:
+  - **Multi-dimensional Analysis**: Keyword detection, urgency patterns, business impact assessment
+  - **Automated Email Notifications**: Professional escalation emails with detailed analysis
+  - **Real-time Dashboard**: Live monitoring through Streamlit interface
+  - **Email Configuration Management**: Support for Gmail, Outlook, corporate SMTP
+  - **Escalation History**: Complete audit trail and resolution tracking
 - **Severity Levels**:
   - 🟢 **Low** (0.0-0.4): Standard support requests
   - 🟡 **Medium** (0.4-0.7): Priority issues requiring attention
@@ -470,11 +685,37 @@ async def custom_ollama_training():
 # Test the Ollama RL system
 python demo_ollama_rl.py
 
+# Test escalation system (includes email configuration)
+python demo_escalation_system.py
+
 # Test knowledge base building
 python dataset/build_database.py
 
 # Test Streamlit interface
 streamlit run ui/streamlit_app.py
+```
+
+### Email Escalation Testing
+```bash
+# Interactive email setup and testing
+python demo_escalation_system.py
+# Choose option 2 for guided email configuration
+
+# Test email configuration
+python -c "
+from utils.email_config_helper import EmailConfigHelper
+helper = EmailConfigHelper()
+result = helper.test_email_connection()
+print('Email test result:', result['status'])
+"
+
+# Send test escalation email
+python -c "
+from utils.email_config_helper import EmailConfigHelper
+helper = EmailConfigHelper()
+success = helper.send_test_email('your_email@example.com')
+print('Test email sent:', success)
+"
 ```
 
 ### System Validation

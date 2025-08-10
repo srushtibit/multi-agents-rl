@@ -5,11 +5,13 @@ Handles loading and validation of system configuration from YAML files.
 
 import yaml
 import os
+import re
 from pathlib import Path
 from typing import Dict, Any, Optional
 from pydantic import BaseModel, ValidationError
 import logging
 from dataclasses import dataclass
+from dotenv import load_dotenv
 
 logger = logging.getLogger(__name__)
 
@@ -69,6 +71,12 @@ class ConfigLoader:
         self.config_path = config_path or "config/system_config.yaml"
         self.config: Optional[SystemConfig] = None
         self._env_prefix = "NEXACORP_"
+
+        # Load .env file if it exists
+        env_path = Path(".env")
+        if env_path.exists():
+            load_dotenv(env_path)
+            logger.info("Loaded environment variables from .env file")
     
     def load_config(self, override_path: Optional[str] = None) -> SystemConfig:
         """Load configuration from YAML file with environment variable overrides."""
@@ -79,11 +87,17 @@ class ConfigLoader:
         
         try:
             with open(config_file, 'r', encoding='utf-8') as f:
-                config_data = yaml.safe_load(f)
-            
-            # Apply environment variable overrides
+                config_content = f.read()
+
+            # Substitute environment variables in the YAML content
+            config_content = self._substitute_env_variables(config_content)
+
+            # Parse the YAML
+            config_data = yaml.safe_load(config_content)
+
+            # Apply additional environment variable overrides
             self._apply_env_overrides(config_data)
-            
+
             self.config = SystemConfig(config_data)
             logger.info(f"Configuration loaded successfully from {config_file}")
             return self.config
@@ -92,20 +106,44 @@ class ConfigLoader:
             raise ValueError(f"Invalid YAML in configuration file: {e}")
         except ValidationError as e:
             raise ValueError(f"Configuration validation failed: {e}")
-    
+
+    def _substitute_env_variables(self, content: str) -> str:
+        """Substitute ${VAR_NAME} patterns with environment variables."""
+        def replace_env_var(match):
+            var_name = match.group(1)
+            env_value = os.getenv(var_name)
+            if env_value is None:
+                logger.warning(f"Environment variable {var_name} not found, keeping placeholder")
+                return match.group(0)  # Return original if not found
+            return env_value
+
+        # Pattern to match ${VAR_NAME}
+        pattern = r'\$\{([^}]+)\}'
+        return re.sub(pattern, replace_env_var, content)
+
     def _apply_env_overrides(self, config_data: Dict[str, Any]):
         """Apply environment variable overrides to configuration."""
         # Define environment variable mappings
         env_mappings = {
+            # System configuration
             f"{self._env_prefix}DEBUG": "system.debug",
             f"{self._env_prefix}LOG_LEVEL": "system.log_level",
             f"{self._env_prefix}OLLAMA_URL": "llm.ollama.base_url",
+            f"{self._env_prefix}DB_CONNECTION": "database.connection_string",
+            f"{self._env_prefix}API_PORT": "api.port",
+
+            # Email configuration (both prefixed and standard)
             f"{self._env_prefix}SMTP_SERVER": "email.smtp_server",
             f"{self._env_prefix}SMTP_PORT": "email.smtp_port",
             f"{self._env_prefix}SENDER_EMAIL": "email.sender_email",
             f"{self._env_prefix}SENDER_PASSWORD": "email.sender_password",
-            f"{self._env_prefix}DB_CONNECTION": "database.connection_string",
-            f"{self._env_prefix}API_PORT": "api.port",
+
+            # Standard email environment variables (commonly used)
+            "EMAIL_SMTP_SERVER": "email.smtp_server",
+            "EMAIL_SMTP_PORT": "email.smtp_port",
+            "EMAIL_SENDER_EMAIL": "email.sender_email",
+            "EMAIL_SENDER_PASSWORD": "email.sender_password",
+            "EMAIL_USE_TLS": "email.use_tls",
         }
         
         for env_var, config_path in env_mappings.items():

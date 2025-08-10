@@ -395,6 +395,7 @@ JSON:
                 type=MessageType.ESCALATION,
                 content=response_content,
                 metadata={
+                    'escalation_triggered': True,
                     'escalation_id': escalation_id,
                     'severity_assessment': {
                         'level': severity_assessment.severity_level,

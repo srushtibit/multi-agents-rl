@@ -1,166 +1,169 @@
-# Multilingual Multi-Agent Support System Configuration
-
-# System Settings
-system:
-  name: "NexaCorp AI Support System"
-  version: "1.0.0"
-  environment: "local"  # local, development, production
-  debug: true
-  log_level: "INFO"
-
-# Language Settings
-languages:
-  supported: ["en", "es", "de", "fr", "hi", "zh", "ja", "pt", "it", "ru"]
-  primary: "en"
-  auto_detect: true
-  translation_service: "googletrans"  # googletrans, azure, aws
-  embedding_model: "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
-
-# LLM Configuration
-llm:
-  provider: "ollama"  # ollama, openai, azure, anthropic
-  models:
-    communication: "qwen3:1.7b"
-    retrieval: "qwen3:1.7b"
-    critic: "qwen3:1.7b"
-    escalation: "qwen3:0.6b"
-  ollama:
-    base_url: "http://localhost:11434"
-    timeout: 60
-    max_retries: 3
-
-# Knowledge Base Configuration
-knowledge_base:
-  vector_db: "faiss"  # faiss, chromadb, weaviate
-  embedding_dimension: 384
-  similarity_threshold: 0.75
-  max_results: 10
-  chunk_size: 512
-  chunk_overlap: 50
-  processors:
-    csv: true
-    xlsx: true
-    docx: true
-    pdf: true
-    txt: true
-  index_path: "kb/faiss.index"
-  metadata_path: "kb/metadata.json"
-
-# Agent Configuration
 agents:
   communication:
-    symbolic_vocab_size: 1000
-    message_length: 64
-    learning_rate: 0.001
     hidden_dim: 256
+    learning_rate: 0.001
+    message_length: 64
     num_layers: 2
-  
-  retrieval:
-    max_documents: 20
-    rerank_threshold: 0.8
-    context_window: 2048
-  
+    symbolic_vocab_size: 1000
   critic:
     reward_components:
-      relevance: 0.4
       accuracy: 0.3
       completeness: 0.2
       language_quality: 0.1
+      relevance: 0.4
     score_threshold: 0.7
-  
   escalation:
-    severity_threshold: 0.9
+    email_delay: 300
     keywords:
-      high_severity: ["urgent", "critical", "emergency", "lawsuit", "legal", "security breach", "data loss"]
-      medium_severity: ["important", "asap", "priority", "deadline"]
-    email_delay: 300  # seconds before sending escalation email
-
-# Reinforcement Learning Configuration
-reinforcement_learning:
-  algorithm: "REINFORCE"  # REINFORCE, PPO, A2C
-  training:
-    episodes: 1000
-    batch_size: 32
-    learning_rate: 0.0003
-    gamma: 0.99
-    epsilon: 0.1
-    entropy_coef: 0.01
-  
-  reward_shaping:
-    base_reward: 1.0
-    penalty_irrelevant: -0.5
-    bonus_early_resolution: 0.3
-    penalty_escalation: -0.2
-  
-  environment:
-    max_steps: 50
-    action_space_size: 1000  # symbolic vocabulary
-    observation_space_size: 512
-
-# Email Configuration
-email:
-  smtp_server: "smtp.gmail.com"
-  smtp_port: 587
-  use_tls: true
-  sender_email: "support-system@nexacorp.com"
-  sender_password: "your_app_password"  # Use environment variable in production
-  escalation_recipients:
-    - "support-head@nexacorp.com"
-    - "emergency@nexacorp.com"
-  templates_path: "config/email_templates"
-
-# Database Configuration
-database:
-  type: "sqlite"  # sqlite, postgresql, mongodb
-  connection_string: "sqlite:///logs/support_system.db"
-  session_timeout: 3600
-  backup_interval: 86400
-
-# API Configuration
+      high_severity:
+      - urgent
+      - critical
+      - emergency
+      - lawsuit
+      - legal
+      - security breach
+      - data loss
+      - system down
+      - outage
+      - breach
+      - hack
+      - attack
+      - cannot access
+      - locked out
+      - crisis
+      - immediate
+      medium_severity:
+      - important
+      - asap
+      - priority
+      - deadline
+      - problem
+      - issue
+      - error
+      - fault
+      - broken
+      - not working
+    severity_threshold: 0.7
+  retrieval:
+    context_window: 2048
+    max_documents: 20
+    rerank_threshold: 0.8
 api:
-  host: "127.0.0.1"
+  cors_origins:
+  - http://localhost:3000
+  - http://127.0.0.1:3000
+  host: 127.0.0.1
   port: 8000
   workers: 4
-  cors_origins: ["http://localhost:3000", "http://127.0.0.1:3000"]
-
-# UI Configuration
-ui:
-  streamlit:
-    port: 8501
-    theme: "dark"
-    layout: "wide"
-  dashboard:
-    refresh_interval: 30
-    max_chat_history: 100
-
-# Monitoring Configuration
+database:
+  backup_interval: 86400
+  connection_string: sqlite:///logs/support_system.db
+  session_timeout: 3600
+  type: sqlite
+email:
+  escalation_recipients:
+  - afeef2001kashif@gmail.com, srushti.vp10@gmail.com
+  sender_email: afeef2001kashif@gmail.com
+  sender_password: ${EMAIL_SENDER_PASSWORD}  # Loaded from .env file
+  smtp_port: 587
+  smtp_server: smtp.gmail.com
+  templates_path: config/email_templates
+  use_tls: true
+knowledge_base:
+  chunk_overlap: 50
+  chunk_size: 512
+  embedding_dimension: 384
+  index_path: kb/faiss.index
+  max_results: 10
+  metadata_path: kb/metadata.json
+  processors:
+    csv: true
+    docx: true
+    pdf: true
+    txt: true
+    xlsx: true
+  similarity_threshold: 0.75
+  vector_db: faiss
+languages:
+  auto_detect: true
+  embedding_model: sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2
+  primary: en
+  supported:
+  - en
+  - es
+  - de
+  - fr
+  - hi
+  - zh
+  - ja
+  - pt
+  - it
+  - ru
+  translation_service: googletrans
+llm:
+  models:
+    communication: qwen3:1.7b
+    critic: qwen3:1.7b
+    escalation: qwen3:0.6b
+    retrieval: qwen3:1.7b
+  ollama:
+    base_url: http://localhost:11434
+    max_retries: 3
+    timeout: 60
+  provider: ollama
 monitoring:
-  enable_wandb: false
   enable_mlflow: true
-  metrics_interval: 60
+  enable_wandb: false
   log_conversations: true
+  metrics_interval: 60
   performance_tracking: true
-
-# Security Configuration
-security:
-  enable_auth: false  # Enable in production
-  api_key_required: false
-  rate_limiting:
-    requests_per_minute: 60
-    burst_size: 10
-  data_encryption: false
-
-# Performance Configuration
-performance:
-  max_concurrent_requests: 10
-  cache_size: 1000
-  model_warmup: true
-  batch_processing: true
-  
-# File Paths
 paths:
-  logs: "logs/"
-  models: "models/"
-  data: "dataset/"
-  cache: "cache/"
-  exports: "exports/"
+  cache: cache/
+  data: dataset/
+  exports: exports/
+  logs: logs/
+  models: models/
+performance:
+  batch_processing: true
+  cache_size: 1000
+  max_concurrent_requests: 10
+  model_warmup: true
+reinforcement_learning:
+  algorithm: REINFORCE
+  environment:
+    action_space_size: 1000
+    max_steps: 50
+    observation_space_size: 512
+  reward_shaping:
+    base_reward: 1.0
+    bonus_early_resolution: 0.3
+    penalty_escalation: -0.2
+    penalty_irrelevant: -0.5
+  training:
+    batch_size: 32
+    entropy_coef: 0.01
+    episodes: 1000
+    epsilon: 0.1
+    gamma: 0.99
+    learning_rate: 0.0003
+security:
+  api_key_required: false
+  data_encryption: false
+  enable_auth: false
+  rate_limiting:
+    burst_size: 10
+    requests_per_minute: 60
+system:
+  debug: true
+  environment: local
+  log_level: INFO
+  name: NexaCorp AI Support System
+  version: 1.0.0
+ui:
+  dashboard:
+    max_chat_history: 100
+    refresh_interval: 30
+  streamlit:
+    layout: wide
+    port: 8501
+    theme: dark
